@@ -50,6 +50,16 @@ class KdpRequest(BaseModel):
     mock: Optional[bool] = None
 
 
+class PricingRequest(BaseModel):
+    list_price: float
+    marketplace: str = "US"
+    paper: str = "white"
+
+
+class MarketingRequest(BaseModel):
+    mock: Optional[bool] = None
+
+
 # --------------------------------------------------------------------------- #
 # Responses
 # --------------------------------------------------------------------------- #

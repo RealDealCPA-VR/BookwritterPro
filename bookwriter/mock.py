@@ -39,6 +39,8 @@ class MockLLM:
             data = self._plan(user)
         elif "issues" in props:
             data = {"issues": []}
+        elif "blurb_variants" in props or "a_plus_modules" in props:
+            data = self._marketing(user)
         elif "keywords" in props and "categories" in props:
             data = self._kdp(user)
         else:
@@ -378,6 +380,53 @@ class MockLLM:
             "reading_age_min": "8" if child else "",
             "reading_age_max": "12" if child else "",
             "series_suggestion": "",
+        }
+
+    # ------------------------------------------------------------------
+    # Marketing copy (blurb variants / A+ modules / author bio / taglines).
+    def _marketing(self, user: str) -> Dict[str, Any]:
+        def grab(pat, default=""):
+            m = re.search(pat, user, re.IGNORECASE)
+            return m.group(1).strip() if m else default
+        pm = re.search(
+            r"PREMISE:\s*\n?(.*?)(?:\n\s*(?:EXISTING DESCRIPTION|Write the marketing)|\Z)",
+            user, re.DOTALL | re.IGNORECASE)
+        premise = (pm.group(1).strip() if pm and pm.group(1).strip()
+                   else "A story waiting to be told.")
+        title = grab(r"BOOK TITLE:\s*(.+)", "") or "this novel"
+        genre = grab(r"GENRE:\s*(.+)", "literary fiction") or "literary fiction"
+        author = grab(r"AUTHOR:\s*(.+)", "") or "the author"
+
+        hook = premise if len(premise) < 200 else premise[:197].rstrip() + "..."
+        kw = self._keywords(premise)
+        focus = kw[0] if kw else "what was lost"
+
+        blurb_variants = [
+            (f"<b>{title}</b> — {hook}<br/><br/>A {genre} about {focus} and the cost "
+             "of the truth. Once you start, you won't want to stop."),
+            (f"They thought it was over. It was only beginning.<br/><br/>{hook}<br/><br/>"
+             f"A {genre} for readers who like their stories to leave a mark."),
+        ]
+        a_plus_modules = [
+            {"headline": "A story that grips from page one",
+             "body": f"{hook} A {genre} built on momentum and stakes that matter."},
+            {"headline": "For readers who love being kept up all night",
+             "body": f"Atmospheric, character-driven, and impossible to put down — "
+                     f"{title} earns every page."},
+        ]
+        author_bio = (
+            f"{author} writes {genre} that lingers long after the last page. "
+            "When not writing, the author can be found chasing the next story.")
+        taglines = [
+            "Some truths refuse to stay buried.",
+            f"A {genre} you'll finish in one sitting.",
+            f"{title}: every choice has a cost.",
+        ]
+        return {
+            "blurb_variants": blurb_variants,
+            "a_plus_modules": a_plus_modules,
+            "author_bio": author_bio,
+            "taglines": taglines,
         }
 
     def _delta(self, user: str) -> Dict[str, Any]:

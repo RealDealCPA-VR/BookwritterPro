@@ -299,6 +299,19 @@ class _ServiceAdapter:
     def epub_path(self, book_id: str) -> str:
         return self._local.epub_path(book_id)
 
+    # ---- print / royalties / marketing (local, shared dir) ------------
+    def export_docx_path(self, book_id: str, **kw) -> str:
+        return self._local.export_docx_path(book_id, **kw)
+
+    def print_spec(self, book_id: str, **kw) -> Dict[str, Any]:
+        return self._local.print_spec(book_id, **kw)
+
+    def estimate_pricing(self, book_id: str, **kw) -> Dict[str, Any]:
+        return self._local.estimate_pricing(book_id, **kw)
+
+    def generate_marketing(self, book_id: str) -> Dict[str, Any]:
+        return self._local.generate_marketing(book_id)
+
 
 def _flatten_create(res: Dict[str, Any]) -> Dict[str, Any]:
     """Turn the HTTP {book, bible} into the flat MCP create_book payload."""
@@ -690,6 +703,101 @@ class _LocalBookService:
             raise BookNotFound(f"{book_id} has no EPUB; run prepare_kdp first")
         return epub
 
+    # ---- print / royalties / marketing --------------------------------
+    def _kdp_metadata(self, book_id: str, graph) -> Any:
+        """Return a KdpMetadata for the book.
+
+        Reuses the kit's metadata.json (written by prepare_kdp) when present so
+        the print interior / marketing match the already-prepared listing; else
+        generates metadata fresh from the continuity graph. The author identity
+        on a fresh build falls back to the book title's implied author only if
+        prepare_kdp has never run — callers wanting real author fields should run
+        prepare_kdp first.
+        """
+        from bookwriter.kdp import KdpMetadata, generate_kdp_metadata
+        from bookwriter.costs import CostLedger
+
+        meta_json = os.path.join(self._kdp_dir(book_id), "metadata.json")
+        if os.path.exists(meta_json):
+            with open(meta_json, "r", encoding="utf-8") as f:
+                return KdpMetadata.from_dict(json.load(f))
+
+        meta = self._read_meta(book_id)
+        settings = self._settings(book_id, meta)
+        llm = self._make_llm(bool(meta.get("mock", False)))
+        return generate_kdp_metadata(
+            llm, settings, CostLedger(), graph,
+            author_first="", author_last="",
+        )
+
+    def _load_graph_or_404(self, book_id: str):
+        graph = self._store(book_id).load_graph()
+        if graph is None:
+            raise BookNotFound(f"{book_id} has no plan; create_book first")
+        return graph
+
+    def export_docx_path(self, book_id: str, *, trim=(6.0, 9.0)) -> str:
+        """Build the 6x9 paperback interior DOCX into <book>/kdp/print/ and return its path."""
+        from bookwriter.print_export import build_docx
+
+        self._read_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        kdp_meta = self._kdp_metadata(book_id, graph)
+        print_dir = os.path.join(self._kdp_dir(book_id), "print")
+        os.makedirs(print_dir, exist_ok=True)
+        path = os.path.join(print_dir, "interior.docx")
+        with open(path, "wb") as f:
+            f.write(build_docx(graph, kdp_meta, trim=trim))
+        return path
+
+    def print_spec(self, book_id: str, *, trim=(6.0, 9.0),
+                   paper: str = "white") -> Dict[str, Any]:
+        """Return trim, page-count estimate, spine width and full-cover dimensions."""
+        from bookwriter.print_export import print_spec as _print_spec
+
+        self._read_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        kdp_meta = self._kdp_metadata(book_id, graph)
+        return _print_spec(graph, kdp_meta, trim=trim, paper=paper)
+
+    def estimate_pricing(self, book_id: str, *, list_price: float,
+                         marketplace: str = "US", paper: str = "white",
+                         trim=(6.0, 9.0)) -> Dict[str, Any]:
+        """Estimate ebook + paperback per-sale royalties for a list price."""
+        from bookwriter.royalties import estimate_page_count, estimate_royalties
+
+        self._read_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        pages = estimate_page_count(graph)
+        return estimate_royalties(
+            list_price=float(list_price),
+            marketplace=marketplace or "US",
+            page_count=pages,
+            trim=trim,
+            paper=paper or "white",
+        )
+
+    def generate_marketing(self, book_id: str) -> Dict[str, Any]:
+        """Generate marketing copy (blurbs, A+ modules, bio, taglines) and cache it."""
+        from bookwriter.kdp import generate_marketing as _generate_marketing
+        from bookwriter.costs import CostLedger
+
+        meta = self._read_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        kdp_meta = self._kdp_metadata(book_id, graph)
+        settings = self._settings(book_id, meta)
+        llm = self._make_llm(bool(meta.get("mock", False)))
+        marketing = _generate_marketing(
+            llm, settings, CostLedger(), graph, kdp_meta
+        )
+        # Cache alongside the kit so a later prepare_kdp/get can reuse it.
+        kdp_dir = self._kdp_dir(book_id)
+        os.makedirs(kdp_dir, exist_ok=True)
+        with open(os.path.join(kdp_dir, "marketing.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(marketing, f, indent=2, ensure_ascii=False)
+        return marketing
+
 
 # ---------------------------------------------------------------------------
 # Profiles helper (no I/O, pure config) — shared by the tool below.
@@ -988,6 +1096,98 @@ def build_server():
             return get_service().get_kdp(book_id)["listing"]
         except BookNotFound as e:
             return f"error: book not found: {e}"
+
+    @mcp.tool()
+    def export_docx(book_id: str) -> Dict[str, Any]:
+        """Build the 6x9 paperback interior as a Word .docx and return its path.
+
+        Produces the print companion to the EPUB: a valid Office Open XML
+        manuscript interior (title page, copyright page, each chapter on a fresh
+        6x9 page, 1" margins) written to the book's `kdp/print/interior.docx`.
+        Reuses the KDP listing metadata from prepare_kdp when it exists (so the
+        title/author/subtitle match the listing); otherwise it generates metadata
+        from the continuity graph first. The book must be planned AND written.
+
+        Returns {"path": <absolute path to interior.docx>}.
+        """
+        try:
+            return {"path": get_service().export_docx_path(book_id)}
+        except BookNotFound as e:
+            return {"error": f"book not found: {e}"}
+
+    @mcp.tool()
+    def print_spec(book_id: str, paper: str = "white") -> Dict[str, Any]:
+        """Compute the paperback print/cover spec (trim, pages, spine, full cover).
+
+        Returns the cover math for a 6x9 KDP paperback: trim size, estimated page
+        count (from total written words), spine width (KDP's APPROXIMATE per-page
+        constant for the chosen paper), full-wrap cover width/height in inches AND
+        the recommended pixel canvas at 300 DPI, plus a notes list. All estimates —
+        confirm in KDP's cover calculator.
+
+        Args:
+            book_id: The id returned by create_book / list_books.
+            paper: "white" (default) or "cream"; cream is marginally thicker.
+
+        Returns the full print-spec dict.
+        """
+        try:
+            return get_service().print_spec(book_id, paper=paper)
+        except BookNotFound as e:
+            return {"error": f"book not found: {e}"}
+
+    @mcp.tool()
+    def estimate_royalties(
+        book_id: str,
+        list_price: float,
+        marketplace: str = "US",
+        paper: str = "white",
+    ) -> Dict[str, Any]:
+        """Estimate per-sale ebook + paperback royalties for a list price.
+
+        Deterministic, dependency-free KDP estimate. Ebook: Kindle 35% vs 70%
+        (70% eligible only for a $2.99-$9.99 US list price, minus a per-MB
+        delivery fee), reporting the applicable plan and the alternate for
+        comparison. Paperback: 60% of list price minus an APPROXIMATE US B&W
+        printing cost derived from the book's estimated page count. All figures
+        are ESTIMATES — confirm in the KDP UI.
+
+        Args:
+            book_id: The id returned by create_book / list_books.
+            list_price: The retail list price in marketplace currency (e.g. 4.99).
+            marketplace: Marketplace code (default "US"; figures use US constants).
+            paper: "white" (default) or "cream" for the paperback print cost.
+
+        Returns {"ebook": {...}, "paperback": {...}, "assumptions": [...],
+        "note": ...}.
+        """
+        try:
+            return get_service().estimate_pricing(
+                book_id, list_price=list_price,
+                marketplace=marketplace, paper=paper,
+            )
+        except BookNotFound as e:
+            return {"error": f"book not found: {e}"}
+
+    @mcp.tool()
+    def generate_marketing(book_id: str) -> Dict[str, Any]:
+        """Generate ad/listing marketing copy for the book (uses the LLM).
+
+        Runs the marketing copywriter over the book's continuity graph and KDP
+        listing to produce copy beyond the single KDP description: up to 3
+        alternative blurb variants (different angles), up to 3 Amazon A+ Content
+        modules (headline + body), a short third-person author bio, and up to 5
+        one-line ad taglines. Every cap is enforced in Python. The result is also
+        cached to `kdp/marketing.json`. Reuses prepare_kdp's metadata when present;
+        runs in mock mode if the book was created with mock=True or no API key.
+
+        Returns {"blurb_variants": [...], "a_plus_modules": [...],
+        "author_bio": str, "taglines": [...]}.
+        """
+        try:
+            return get_service().generate_marketing(book_id)
+        except BookNotFound as e:
+            return {"error": f"book not found: {e}"}
 
     return mcp
 

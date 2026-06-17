@@ -68,6 +68,52 @@
     return "";
   }
 
+  // Money formatter ($X.XX) tolerant of null (KDP returns null for an
+  // ineligible 70% plan).
+  function money(n) {
+    if (n == null || n === "") return "—";
+    const v = Number(n);
+    if (!isFinite(v)) return "—";
+    return "$" + v.toFixed(2);
+  }
+
+  // Trailing-edge debounce.
+  function debounce(fn, ms) {
+    let t = null;
+    return function (...args) {
+      if (t) clearTimeout(t);
+      t = setTimeout(() => { t = null; fn.apply(this, args); }, ms);
+    };
+  }
+
+  // Copy arbitrary text to the clipboard with a graceful fallback + toast.
+  async function copyText(text, label) {
+    text = String(text == null ? "" : text);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); ta.remove();
+      }
+      toast(`${label || "Text"} copied to your clipboard.`, { title: "Copied", type: "good" });
+    } catch (err) {
+      toast("Couldn't copy to the clipboard.", { title: "Copy failed", type: "error" });
+    }
+  }
+
+  // A small "Copy" button bound to a text string (returns the element).
+  function copyButton(text, label) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "kdp-mini-btn";
+    b.textContent = "Copy";
+    b.addEventListener("click", () => copyText(text, label || "Text"));
+    return b;
+  }
+
   // -------------------------------------------------------------- the markup
   function viewMarkup() {
     return (
@@ -239,24 +285,105 @@
         <p class="kdp-cover-cap">Your KDP-ready cover · ${COVER_W}×${COVER_H}</p>
       </div>
 
-      <div class="kdp-actions-card">
-        <h2 class="rail-title">Get your files</h2>
-        <a class="btn btn-primary kdp-action" id="kdp-epub" href="#" download>
-          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Download EPUB
-        </a>
-        <button class="btn btn-ghost kdp-action" id="kdp-cover-dl" type="button">
-          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 16l4-5 3 3 4-5 5 7M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Download cover (PNG)
-        </button>
-        <button class="btn btn-ghost kdp-action" id="kdp-copy" type="button">
-          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2"/></svg>
-          Copy KDP listing
-        </button>
-        <a class="btn btn-ghost kdp-action" id="kdp-open" href="${KDP_NEW_TITLE_URL}" target="_blank" rel="noopener noreferrer">
-          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M14 5h5v5M19 5l-9 9M11 5H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Open Amazon KDP
-        </a>
+      <div class="kdp-kit-card">
+        <!-- Tabbed publishing kit: eBook / Paperback / Pricing / Marketing.
+             Tabs are role=tab buttons driving role=tabpanel sections; keyboard
+             arrows move focus. The eBook panel keeps the original file actions
+             (ids unchanged) so existing behavior is preserved. -->
+        <div class="kdp-tabs" role="tablist" aria-label="Publishing kit">
+          <button class="kdp-tab is-active" id="kdp-tab-ebook" type="button" role="tab" aria-selected="true" aria-controls="kdp-panel-ebook" data-tab="ebook">eBook</button>
+          <button class="kdp-tab" id="kdp-tab-paper" type="button" role="tab" aria-selected="false" aria-controls="kdp-panel-paper" tabindex="-1" data-tab="paper">Paperback</button>
+          <button class="kdp-tab" id="kdp-tab-pricing" type="button" role="tab" aria-selected="false" aria-controls="kdp-panel-pricing" tabindex="-1" data-tab="pricing">Pricing</button>
+          <button class="kdp-tab" id="kdp-tab-marketing" type="button" role="tab" aria-selected="false" aria-controls="kdp-panel-marketing" tabindex="-1" data-tab="marketing">Marketing</button>
+        </div>
+
+        <!-- eBook -->
+        <section class="kdp-panel is-active" id="kdp-panel-ebook" role="tabpanel" aria-labelledby="kdp-tab-ebook" tabindex="0">
+          <h2 class="rail-title">Get your eBook files</h2>
+          <a class="btn btn-primary kdp-action" id="kdp-epub" href="#" download>
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download EPUB
+          </a>
+          <button class="btn btn-ghost kdp-action" id="kdp-cover-dl" type="button">
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 16l4-5 3 3 4-5 5 7M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download cover (PNG)
+          </button>
+          <button class="btn btn-ghost kdp-action" id="kdp-copy" type="button">
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+            Copy KDP listing
+          </button>
+          <a class="btn btn-ghost kdp-action" id="kdp-open" href="${KDP_NEW_TITLE_URL}" target="_blank" rel="noopener noreferrer">
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M14 5h5v5M19 5l-9 9M11 5H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Open Amazon KDP
+          </a>
+        </section>
+
+        <!-- Paperback -->
+        <section class="kdp-panel" id="kdp-panel-paper" role="tabpanel" aria-labelledby="kdp-tab-paper" tabindex="0" hidden>
+          <h2 class="rail-title">Paperback (6×9)</h2>
+          <a class="btn btn-primary kdp-action" id="kdp-docx" href="#" download>
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download interior (DOCX, 6×9)
+          </a>
+          <button class="btn btn-ghost kdp-action" id="kdp-print-cover" type="button" hidden>
+            <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><path d="M4 16l4-5 3 3 4-5 5 7M4 20h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Download print cover (SVG)
+          </button>
+          <dl class="kdp-spec" id="kdp-spec" aria-live="polite">
+            <div class="kdp-spec-row"><dt>Trim size</dt><dd id="kdp-spec-trim">—</dd></div>
+            <div class="kdp-spec-row"><dt>Est. page count</dt><dd id="kdp-spec-pages">—</dd></div>
+            <div class="kdp-spec-row"><dt>Spine width</dt><dd id="kdp-spec-spine">—</dd></div>
+            <div class="kdp-spec-row"><dt>Full cover</dt><dd id="kdp-spec-cover">—</dd></div>
+          </dl>
+          <p class="kdp-note" id="kdp-print-note">Estimates — confirm exact values in KDP's cover calculator. The print cover is a starting point, not a finished design.</p>
+        </section>
+
+        <!-- Pricing -->
+        <section class="kdp-panel" id="kdp-panel-pricing" role="tabpanel" aria-labelledby="kdp-tab-pricing" tabindex="0" hidden>
+          <h2 class="rail-title">Pricing &amp; royalties</h2>
+          <div class="kdp-price-controls">
+            <div class="field">
+              <label for="kdp-price">List price (USD)</label>
+              <div class="kdp-price-input">
+                <span class="kdp-price-cur" aria-hidden="true">$</span>
+                <input id="kdp-price" type="number" min="0" step="0.01" value="4.99" inputmode="decimal" />
+              </div>
+            </div>
+            <div class="field">
+              <label for="kdp-price-market">Marketplace</label>
+              <select id="kdp-price-market">
+                <option value="US" selected>Amazon.com (US)</option>
+                <option value="UK">Amazon.co.uk (UK)</option>
+                <option value="DE">Amazon.de (DE)</option>
+                <option value="CA">Amazon.ca (CA)</option>
+                <option value="AU">Amazon.com.au (AU)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="kdp-price-paper">Paper</label>
+              <select id="kdp-price-paper">
+                <option value="white" selected>White</option>
+                <option value="cream">Cream</option>
+              </select>
+            </div>
+          </div>
+          <div class="kdp-royalty" id="kdp-royalty" aria-live="polite" aria-busy="false">
+            <p class="kdp-muted" id="kdp-royalty-empty">Enter a list price to estimate per-sale royalties.</p>
+            <div class="kdp-royalty-body" id="kdp-royalty-body" hidden></div>
+          </div>
+          <p class="kdp-note">estimates — confirm in KDP.</p>
+        </section>
+
+        <!-- Marketing -->
+        <section class="kdp-panel" id="kdp-panel-marketing" role="tabpanel" aria-labelledby="kdp-tab-marketing" tabindex="0" hidden>
+          <h2 class="rail-title">Marketing copy</h2>
+          <button class="btn btn-primary kdp-action" id="kdp-marketing-gen" type="button">
+            <span class="btn-label">✨ Generate marketing copy</span>
+            <span class="btn-spinner" aria-hidden="true"></span>
+          </button>
+          <p class="kdp-muted" id="kdp-marketing-hint">Blurb variants, A+ content modules, an author bio and ad taglines — generated from your story. Works in demo mode.</p>
+          <div class="kdp-marketing-out" id="kdp-marketing-out" aria-live="polite"></div>
+        </section>
       </div>
 
       <div class="kdp-checklist-card">
@@ -493,6 +620,283 @@
 
     // ------------------------------------------------------- Copy listing
     $("#kdp-copy", view).addEventListener("click", () => copyListing(id));
+
+    // ------------------------------------------------------------- Tabs
+    const tabs = $$(".kdp-tab", view);
+    const panels = $$(".kdp-panel", view);
+    function selectTab(name, focus) {
+      tabs.forEach((t) => {
+        const on = t.dataset.tab === name;
+        t.classList.toggle("is-active", on);
+        t.setAttribute("aria-selected", on ? "true" : "false");
+        t.tabIndex = on ? 0 : -1;
+        if (on && focus) t.focus();
+      });
+      panels.forEach((p) => {
+        const on = p.id === `kdp-panel-${name}`;
+        p.classList.toggle("is-active", on);
+        p.hidden = !on;
+      });
+      // Lazy-load on first reveal.
+      if (name === "paper") loadPrintSpec();
+      if (name === "pricing") schedulePricing();
+    }
+    tabs.forEach((t, i) => {
+      t.addEventListener("click", () => selectTab(t.dataset.tab));
+      t.addEventListener("keydown", (e) => {
+        let j = null;
+        if (e.key === "ArrowRight" || e.key === "ArrowDown") j = (i + 1) % tabs.length;
+        else if (e.key === "ArrowLeft" || e.key === "ArrowUp") j = (i - 1 + tabs.length) % tabs.length;
+        else if (e.key === "Home") j = 0;
+        else if (e.key === "End") j = tabs.length - 1;
+        if (j != null) { e.preventDefault(); selectTab(tabs[j].dataset.tab, true); }
+      });
+    });
+
+    // --------------------------------------------------- Paperback (DOCX + spec)
+    $("#kdp-docx", view).setAttribute("href", `/api/books/${id}/export/docx?download=1`);
+
+    let printSpec = null;
+    let printSpecLoaded = false;
+    async function loadPrintSpec() {
+      if (printSpecLoaded) return;
+      printSpecLoaded = true;
+      try {
+        const res = await fetch(`/api/books/${id}/print`);
+        if (!res.ok) throw new Error(`Print spec unavailable (${res.status})`);
+        const data = await res.json();
+        printSpec = (data && data.spec) || null;
+        renderPrintSpec(printSpec);
+      } catch (err) {
+        printSpecLoaded = false; // allow a retry on next reveal
+        const note = $("#kdp-print-note", view);
+        if (note) note.textContent = err.message || "Couldn't load the print spec.";
+      }
+    }
+    function renderPrintSpec(s) {
+      if (!s) return;
+      const inch = (n) => `${Number(n).toFixed(3)}"`;
+      $("#kdp-spec-trim", view).textContent = `${s.trim_w} × ${s.trim_h} in`;
+      $("#kdp-spec-pages", view).textContent =
+        `~${fmtInt(s.page_count_estimate)} pages`;
+      $("#kdp-spec-spine", view).textContent = inch(s.spine_width_in);
+      $("#kdp-spec-cover", view).textContent =
+        `${inch(s.full_cover_width_in)} × ${inch(s.full_cover_height_in)} (with bleed)`;
+    }
+
+    // Optional print-cover SVG: only show if the backend serves one. We probe
+    // a conventional endpoint once and reveal the button on a 2xx, else skip.
+    (async function maybePrintCover() {
+      const btn = $("#kdp-print-cover", view);
+      const url = `/api/books/${id}/export/print-cover`;
+      try {
+        const res = await fetch(url, { method: "HEAD" });
+        if (!res.ok) return; // skip gracefully — no print-cover asset
+        btn.hidden = false;
+        btn.addEventListener("click", () => { window.location.href = url + "?download=1"; });
+      } catch { /* endpoint absent — skip */ }
+    })();
+
+    // --------------------------------------------------- Pricing & royalties
+    const priceInput = $("#kdp-price", view);
+    const priceMarket = $("#kdp-price-market", view);
+    const pricePaper = $("#kdp-price-paper", view);
+    const royaltyWrap = $("#kdp-royalty", view);
+    const royaltyEmpty = $("#kdp-royalty-empty", view);
+    const royaltyBody = $("#kdp-royalty-body", view);
+
+    async function runPricing() {
+      const price = parseFloat(priceInput.value);
+      if (!isFinite(price) || price <= 0) {
+        royaltyBody.hidden = true;
+        royaltyEmpty.hidden = false;
+        royaltyEmpty.textContent = "Enter a list price to estimate per-sale royalties.";
+        return;
+      }
+      royaltyWrap.setAttribute("aria-busy", "true");
+      try {
+        const res = await API._json("POST", `/books/${id}/pricing`, {
+          list_price: price,
+          marketplace: priceMarket.value,
+          paper: pricePaper.value,
+        });
+        renderPricing((res && res.pricing) || res);
+      } catch (err) {
+        royaltyBody.hidden = true;
+        royaltyEmpty.hidden = false;
+        royaltyEmpty.textContent = err.message || "Couldn't estimate pricing.";
+      } finally {
+        royaltyWrap.setAttribute("aria-busy", "false");
+      }
+    }
+    const schedulePricing = debounce(runPricing, 350);
+
+    function renderPricing(p) {
+      if (!p) return;
+      royaltyEmpty.hidden = true;
+      royaltyBody.hidden = false;
+      const eb = p.ebook || {};
+      const pb = p.paperback || {};
+      const alt = eb.alternate_plan || {};
+      const note = esc(p.note || "estimates — confirm in KDP");
+
+      const ebAlt = alt.eligible === false
+        ? `<span class="kdp-roy-alt">70% plan: not eligible — ${esc(alt.reason || "price out of range")}</span>`
+        : `<span class="kdp-roy-alt">${esc(alt.plan || "")} plan: ${money(alt.royalty_per_sale)} / sale</span>`;
+
+      const belowCost = pb.below_cost
+        ? `<p class="kdp-roy-warn">⚠ List price is below the printing cost — paperback royalty floored at $0.00.</p>`
+        : "";
+
+      royaltyBody.innerHTML =
+        `<div class="kdp-roy-card">
+           <div class="kdp-roy-head"><span class="kdp-roy-kind">eBook</span><span class="kdp-roy-plan">${esc(eb.plan || "")} plan</span></div>
+           <div class="kdp-roy-amount">${money(eb.royalty_per_sale)}<span class="kdp-roy-per"> / sale</span></div>
+           ${ebAlt}
+         </div>
+         <div class="kdp-roy-card">
+           <div class="kdp-roy-head"><span class="kdp-roy-kind">Paperback</span><span class="kdp-roy-plan">${(Number(pb.royalty_rate || 0.6) * 100).toFixed(0)}% rate</span></div>
+           <div class="kdp-roy-amount">${money(pb.royalty_per_sale)}<span class="kdp-roy-per"> / sale</span></div>
+           <span class="kdp-roy-alt">Printing cost: ${money(pb.printing_cost)} · ~${fmtInt(pb.page_count || 0)} pages</span>
+           ${belowCost}
+         </div>
+         <p class="kdp-roy-note">${note}</p>`;
+    }
+
+    priceInput.addEventListener("input", schedulePricing);
+    priceMarket.addEventListener("change", runPricing);
+    pricePaper.addEventListener("change", runPricing);
+
+    // --------------------------------------------------- Marketing copy
+    const mktBtn = $("#kdp-marketing-gen", view);
+    const mktOut = $("#kdp-marketing-out", view);
+    const mktHint = $("#kdp-marketing-hint", view);
+    mktBtn.addEventListener("click", async () => {
+      mktBtn.classList.add("is-busy"); mktBtn.disabled = true;
+      $(".btn-label", mktBtn).textContent = "Generating…";
+      mktOut.innerHTML = `<p class="kdp-muted kdp-loading">Writing blurbs, A+ modules, a bio and taglines…</p>`;
+      try {
+        const res = await API._json("POST", `/books/${id}/marketing`, {});
+        renderMarketing((res && res.marketing) || res);
+        if (mktHint) mktHint.hidden = true;
+        toast("Marketing copy generated.", { title: "Done", type: "good" });
+      } catch (err) {
+        mktOut.innerHTML = "";
+        toast(err.message || "Marketing generation failed.", { title: "Couldn't generate", type: "error" });
+        const p = document.createElement("p");
+        p.className = "kdp-muted"; p.textContent = err.message || "Marketing generation failed.";
+        mktOut.appendChild(p);
+      } finally {
+        mktBtn.classList.remove("is-busy"); mktBtn.disabled = false;
+        $(".btn-label", mktBtn).textContent = "✨ Generate marketing copy";
+      }
+    });
+
+    function renderMarketing(m) {
+      mktOut.innerHTML = "";
+      if (!m) return;
+
+      // ---- blurb variants ----
+      const blurbs = Array.isArray(m.blurb_variants) ? m.blurb_variants : [];
+      if (blurbs.length) {
+        const sec = document.createElement("div");
+        sec.className = "kdp-mkt-sec";
+        sec.appendChild(mktLabel("Blurb variants"));
+        blurbs.forEach((b, i) => {
+          const card = document.createElement("div");
+          card.className = "kdp-mkt-card";
+          const body = document.createElement("p");
+          body.className = "kdp-mkt-blurb"; body.textContent = b;
+          const acts = document.createElement("div");
+          acts.className = "kdp-mkt-acts";
+          const useBtn = document.createElement("button");
+          useBtn.type = "button"; useBtn.className = "kdp-mini-btn kdp-mkt-use";
+          useBtn.textContent = "Use as description";
+          useBtn.addEventListener("click", () => {
+            desc.value = b; updateDesc();
+            toast("Description filled in. Review, then copy into KDP.", { title: "Applied", type: "good" });
+          });
+          acts.appendChild(useBtn);
+          acts.appendChild(copyButton(b, `Blurb ${i + 1}`));
+          card.appendChild(body); card.appendChild(acts);
+          sec.appendChild(card);
+        });
+        mktOut.appendChild(sec);
+      }
+
+      // ---- A+ content modules ----
+      const mods = Array.isArray(m.a_plus_modules) ? m.a_plus_modules : [];
+      if (mods.length) {
+        const sec = document.createElement("div");
+        sec.className = "kdp-mkt-sec";
+        sec.appendChild(mktLabel("A+ content modules"));
+        mods.forEach((mod) => {
+          const card = document.createElement("div");
+          card.className = "kdp-mkt-card";
+          const h = document.createElement("p");
+          h.className = "kdp-mkt-head"; h.textContent = mod.headline || "";
+          const body = document.createElement("p");
+          body.className = "kdp-mkt-body"; body.textContent = mod.body || "";
+          const acts = document.createElement("div");
+          acts.className = "kdp-mkt-acts";
+          const txt = `${mod.headline || ""}\n\n${mod.body || ""}`.trim();
+          acts.appendChild(copyButton(txt, "A+ module"));
+          card.appendChild(h); card.appendChild(body); card.appendChild(acts);
+          sec.appendChild(card);
+        });
+        mktOut.appendChild(sec);
+      }
+
+      // ---- author bio ----
+      if (m.author_bio) {
+        const sec = document.createElement("div");
+        sec.className = "kdp-mkt-sec";
+        sec.appendChild(mktLabel("Author bio"));
+        const card = document.createElement("div");
+        card.className = "kdp-mkt-card";
+        const body = document.createElement("p");
+        body.className = "kdp-mkt-body"; body.textContent = m.author_bio;
+        const acts = document.createElement("div");
+        acts.className = "kdp-mkt-acts";
+        acts.appendChild(copyButton(m.author_bio, "Author bio"));
+        card.appendChild(body); card.appendChild(acts);
+        sec.appendChild(card);
+        mktOut.appendChild(sec);
+      }
+
+      // ---- taglines (chips) ----
+      const tags = Array.isArray(m.taglines) ? m.taglines : [];
+      if (tags.length) {
+        const sec = document.createElement("div");
+        sec.className = "kdp-mkt-sec";
+        sec.appendChild(mktLabel("Taglines"));
+        const chips = document.createElement("div");
+        chips.className = "kdp-mkt-tags";
+        tags.forEach((t) => {
+          const chip = document.createElement("button");
+          chip.type = "button"; chip.className = "kdp-mkt-tag";
+          chip.title = "Copy tagline";
+          chip.textContent = t;
+          chip.addEventListener("click", () => copyText(t, "Tagline"));
+          chips.appendChild(chip);
+        });
+        sec.appendChild(chips);
+        mktOut.appendChild(sec);
+      }
+
+      if (!mktOut.children.length) {
+        const p = document.createElement("p");
+        p.className = "kdp-muted"; p.textContent = "No marketing copy was returned.";
+        mktOut.appendChild(p);
+      }
+    }
+
+    function mktLabel(text) {
+      const el = document.createElement("p");
+      el.className = "kdp-mkt-label";
+      el.textContent = text;
+      return el;
+    }
 
     // ---- Pre-flight validation badge on EPUB / open (non-blocking hints) ----
     function validate() {

@@ -37,6 +37,12 @@ MAX_CATEGORIES = 3
 MAX_CONTRIBUTORS = 9
 STORYTELLER_KEYWORD = "StorytellerUK2026"
 
+# Marketing-generator caps (our own product limits, enforced in Python)
+MAX_BLURB_VARIANTS = 3
+MAX_APLUS_MODULES = 3
+MAX_TAGLINES = 5
+MAX_BLURB_CHARS = 4000
+
 
 # ---------------------------------------------------------------------------
 # 1. Schema for the LLM-generated fields ONLY
@@ -85,6 +91,48 @@ KDP_SCHEMA: Dict[str, Any] = {
         "series_suggestion": {
             "type": "string",
             "description": "Suggested series name if this reads like book 1 of a series; else empty.",
+        },
+    },
+}
+
+
+# Marketing copy the LLM writes (blurb variants / A+ modules / bio / taglines).
+MARKETING_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["blurb_variants", "a_plus_modules", "author_bio", "taglines"],
+    "properties": {
+        "blurb_variants": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "2-3 alternative back-cover / product-description blurbs, each a "
+                "punchy hook (NOT a synopsis), under 4000 characters, no spoilers."
+            ),
+        },
+        "a_plus_modules": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["headline", "body"],
+                "properties": {
+                    "headline": {"type": "string",
+                                 "description": "Short A+ Content module headline."},
+                    "body": {"type": "string",
+                             "description": "1-3 sentence A+ module body copy."},
+                },
+            },
+            "description": "Up to 3 Amazon A+ Content modules (headline + body).",
+        },
+        "author_bio": {
+            "type": "string",
+            "description": "A short third-person author bio for the Author Central page.",
+        },
+        "taglines": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Up to 5 one-line taglines for ads / social posts.",
         },
     },
 }
@@ -329,6 +377,90 @@ def generate_kdp_metadata(
         reading_age_min=reading_age_min,
         reading_age_max=reading_age_max,
     )
+
+
+# ---------------------------------------------------------------------------
+# 3b. Marketing copy generator (blurb variants / A+ modules / bio / taglines)
+# ---------------------------------------------------------------------------
+def generate_marketing(llm, settings, ledger, graph, meta: "KdpMetadata") -> Dict[str, Any]:
+    """Generate ad/listing marketing copy via the LLM and enforce our caps.
+
+    Produces alternative blurbs, Amazon A+ Content modules, an author bio, and
+    short taglines — the copy an author needs beyond the single KDP description.
+    Caps (<=3 blurbs, <=3 A+ modules, <=5 taglines, each blurb <=4000 chars) are
+    re-enforced in Python; we never trust the model to respect them.
+    """
+    b = graph.bible
+    system = (
+        "You are an elite book-marketing copywriter. Write punchy, HONEST,"
+        " spoiler-free copy that sells the EXPERIENCE of the book — hooks, stakes,"
+        " emotional promise — never a plot synopsis and never hype words like"
+        " 'bestseller' or 'award-winning'. Give 2-3 alternative blurbs in"
+        " different angles, up to 3 Amazon A+ Content modules (a short headline"
+        " plus 1-3 sentences each), a short third-person author bio, and up to 5"
+        " one-line taglines for ads. Return strictly the requested JSON schema."
+    )
+    user = (
+        f"BOOK TITLE: {meta.full_title()}\n"
+        f"AUTHOR: {meta.author_full()}\n"
+        f"GENRE: {b.genre}\n"
+        f"TONE: {b.tone}\n"
+        f"THEMES: {', '.join(b.themes)}\n"
+        f"LOGLINE: {b.logline}\n\n"
+        f"PREMISE:\n{b.premise}\n\n"
+        f"EXISTING DESCRIPTION:\n{meta.description}\n\n"
+        "Write the marketing copy for this book."
+    )
+
+    data = llm.complete_json(
+        stage="kdp",
+        model=settings.profile.write,
+        system=system,
+        user=user,
+        schema=MARKETING_SCHEMA,
+        max_tokens=3000,
+        ledger=ledger,
+    )
+
+    # --- ENFORCE caps (never trust the model) ------------------------------
+    blurbs: List[str] = []
+    for v in (data.get("blurb_variants") or []):
+        if isinstance(v, str) and v.strip():
+            blurbs.append(_truncate_words(v.strip(), MAX_BLURB_CHARS))
+        if len(blurbs) >= MAX_BLURB_VARIANTS:
+            break
+
+    modules: List[Dict[str, str]] = []
+    for m in (data.get("a_plus_modules") or []):
+        if not isinstance(m, dict):
+            continue
+        headline = str(m.get("headline", "") or "").strip()
+        body = str(m.get("body", "") or "").strip()
+        if headline or body:
+            modules.append({"headline": headline, "body": body})
+        if len(modules) >= MAX_APLUS_MODULES:
+            break
+
+    taglines: List[str] = []
+    seen = set()
+    for t in (data.get("taglines") or []):
+        if not isinstance(t, str):
+            continue
+        tt = t.strip()
+        if tt and tt.lower() not in seen:
+            seen.add(tt.lower())
+            taglines.append(tt)
+        if len(taglines) >= MAX_TAGLINES:
+            break
+
+    author_bio = str(data.get("author_bio", "") or "").strip()
+
+    return {
+        "blurb_variants": blurbs,
+        "a_plus_modules": modules,
+        "author_bio": author_bio,
+        "taglines": taglines,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -724,14 +856,27 @@ Files in this kit:
 
 
 def build_kdp_kit(graph, meta: "KdpMetadata", out_dir: str, *,
-                  cover_svg: Optional[str] = None) -> Dict[str, Any]:
+                  cover_svg: Optional[str] = None,
+                  trim=(6.0, 9.0), paper: str = "white",
+                  marketing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Write the full KDP kit to ``out_dir`` and return the paths + metadata.
 
-    Produces: metadata.json, manuscript.epub, cover.svg, kdp-listing.txt,
-    CHECKLIST.md. The cover embedded in the EPUB and written to cover.svg is the
-    one you pass (or a generated fallback) — they stay in sync.
+    Produces the ebook kit (metadata.json, manuscript.epub, cover.svg,
+    kdp-listing.txt, CHECKLIST.md) PLUS the print kit under ``print/``
+    (interior.docx, print-spec.json, print-cover.svg) and, when a pre-generated
+    ``marketing`` dict is supplied, marketing.json. The cover embedded in the EPUB
+    and written to cover.svg is the one you pass (or a generated fallback).
+
+    ``marketing`` is accepted as data (not generated here) so this stays usable in
+    pure-export contexts with no LLM/ledger. New kwargs are optional — existing
+    callers are unaffected.
     """
+    # Local import keeps core import-light (no print path pulled in unless used).
+    from . import print_export as _pe
+
     os.makedirs(out_dir, exist_ok=True)
+    print_dir = os.path.join(out_dir, "print")
+    os.makedirs(print_dir, exist_ok=True)
     cover = cover_svg if cover_svg else _fallback_cover_svg(meta)
 
     paths = {
@@ -740,6 +885,9 @@ def build_kdp_kit(graph, meta: "KdpMetadata", out_dir: str, *,
         "cover": os.path.join(out_dir, "cover.svg"),
         "listing": os.path.join(out_dir, "kdp-listing.txt"),
         "checklist": os.path.join(out_dir, "CHECKLIST.md"),
+        "docx": os.path.join(print_dir, "interior.docx"),
+        "print_spec": os.path.join(print_dir, "print-spec.json"),
+        "print_cover": os.path.join(print_dir, "print-cover.svg"),
     }
 
     meta_dict = meta.to_dict()
@@ -754,4 +902,23 @@ def build_kdp_kit(graph, meta: "KdpMetadata", out_dir: str, *,
     with open(paths["checklist"], "w", encoding="utf-8") as f:
         f.write(_checklist_md(meta))
 
-    return {"paths": paths, "metadata": meta_dict}
+    # --- print kit ---------------------------------------------------------
+    spec = _pe.print_spec(graph, meta, trim=trim, paper=paper)
+    with open(paths["docx"], "wb") as f:
+        f.write(_pe.build_docx(graph, meta, trim=trim))
+    with open(paths["print_spec"], "w", encoding="utf-8") as f:
+        json.dump(spec, f, indent=2, ensure_ascii=False)
+    with open(paths["print_cover"], "w", encoding="utf-8") as f:
+        f.write(_pe.build_print_cover_svg(graph, meta, spec, front_cover_svg=cover))
+
+    result: Dict[str, Any] = {"paths": paths, "metadata": meta_dict,
+                              "print_spec": spec}
+
+    # --- optional marketing copy ------------------------------------------
+    if marketing is not None:
+        paths["marketing"] = os.path.join(out_dir, "marketing.json")
+        with open(paths["marketing"], "w", encoding="utf-8") as f:
+            json.dump(marketing, f, indent=2, ensure_ascii=False)
+        result["marketing"] = marketing
+
+    return result

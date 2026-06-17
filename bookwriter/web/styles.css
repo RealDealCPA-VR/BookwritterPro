@@ -1706,6 +1706,95 @@ a:focus-visible, button:focus-visible, [tabindex]:focus-visible, summary:focus-v
 }
 .kdp-note { font-size: var(--t-xs); color: var(--ink-faint); line-height: 1.5; border-top: 1px solid var(--line); padding-top: var(--s-3); }
 
+/* ---- publishing kit: tabbed card (eBook / Paperback / Pricing / Marketing) ---- */
+.kdp-kit-card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden;
+}
+.kdp-tabs {
+  display: flex; gap: var(--s-1); padding: var(--s-2);
+  background: var(--surface-2); border-bottom: 1px solid var(--line);
+}
+.kdp-tab {
+  flex: 1; border: none; background: transparent; cursor: pointer;
+  padding: var(--s-2) var(--s-2); border-radius: var(--radius-sm);
+  font-size: var(--t-xs); font-weight: 600; color: var(--ink-soft);
+  font-family: inherit; letter-spacing: -0.01em; white-space: nowrap;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.kdp-tab:hover:not(.is-active) { color: var(--ink); }
+.kdp-tab.is-active { background: var(--surface); color: var(--accent-strong); box-shadow: var(--shadow-sm); }
+.kdp-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.kdp-panel { display: none; padding: var(--s-5); }
+.kdp-panel.is-active { display: grid; gap: var(--s-3); animation: kdpPanelIn .26s var(--ease) both; }
+.kdp-panel:focus-visible { outline: none; }
+@keyframes kdpPanelIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.kdp-muted { font-size: var(--t-xs); color: var(--ink-faint); line-height: 1.5; }
+
+/* ---- paperback spec readout ---- */
+.kdp-spec { display: grid; gap: var(--s-2); margin: var(--s-1) 0 0; }
+.kdp-spec-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-3); font-size: var(--t-sm); }
+.kdp-spec-row dt { color: var(--ink-soft); }
+.kdp-spec-row dd { margin: 0; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
+
+/* ---- pricing controls + royalty readout ---- */
+.kdp-price-controls { display: grid; gap: var(--s-3); }
+.kdp-price-input { position: relative; }
+.kdp-price-input .kdp-price-cur {
+  position: absolute; left: var(--s-3); top: 50%; transform: translateY(-50%);
+  color: var(--ink-faint); font-weight: 600; pointer-events: none;
+}
+.kdp-price-input input { padding-left: var(--s-6); }
+.kdp-royalty[aria-busy="true"] { opacity: .55; transition: opacity var(--dur) var(--ease); }
+.kdp-royalty-body { display: grid; gap: var(--s-3); }
+.kdp-roy-card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--paper-2); padding: var(--s-3) var(--s-4); display: grid; gap: var(--s-1);
+}
+.kdp-roy-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-2); }
+.kdp-roy-kind { font-weight: 700; font-size: var(--t-sm); color: var(--ink); }
+.kdp-roy-plan { font-size: var(--t-xs); color: var(--accent-strong); font-weight: 600; }
+.kdp-roy-amount {
+  font-family: var(--font-display); font-size: 1.5rem; font-weight: 600;
+  color: var(--ink); font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+}
+.kdp-roy-per { font-size: var(--t-sm); font-weight: 400; color: var(--ink-faint); font-family: var(--font-sans, inherit); }
+.kdp-roy-alt { font-size: var(--t-xs); color: var(--ink-soft); }
+.kdp-roy-warn { font-size: var(--t-xs); color: var(--bad); font-weight: 600; margin: var(--s-1) 0 0; }
+.kdp-roy-note { font-size: var(--t-xs); color: var(--ink-faint); font-style: italic; }
+
+/* ---- marketing copy ---- */
+.kdp-marketing-out { display: grid; gap: var(--s-4); }
+.kdp-loading { animation: kdpPulse 1.4s var(--ease) infinite; }
+@keyframes kdpPulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+.kdp-mkt-sec { display: grid; gap: var(--s-2); }
+.kdp-mkt-label {
+  font-size: var(--t-xs); font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--ink-faint);
+}
+.kdp-mkt-card {
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--paper-2); padding: var(--s-3) var(--s-4); display: grid; gap: var(--s-2);
+}
+.kdp-mkt-head { font-weight: 700; font-size: var(--t-sm); color: var(--ink); margin: 0; }
+.kdp-mkt-blurb, .kdp-mkt-body { font-size: var(--t-sm); line-height: 1.55; color: var(--ink-soft); margin: 0; }
+.kdp-mkt-acts { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.kdp-mkt-tags { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.kdp-mkt-tag {
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  background: var(--accent-soft); color: var(--ink);
+  border-radius: 999px; padding: var(--s-1) var(--s-3); font-size: var(--t-sm);
+  cursor: pointer; font-family: inherit;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.kdp-mkt-tag:hover { border-color: var(--accent); }
+.kdp-mkt-tag:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .kdp-panel.is-active { animation: none; }
+  .kdp-loading { animation: none; opacity: .8; }
+}
+
 /* ===========================================================================
    COMMAND PALETTE (⌘K / Ctrl-K), SHORTCUTS HELP, SKIP LINK, VIEW TRANSITIONS
    Editorial overlay system — paper surface, serif accents, the ember accent.

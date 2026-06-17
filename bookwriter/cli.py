@@ -117,7 +117,7 @@ def cmd_report(args) -> int:
 
 def cmd_kdp(args) -> int:
     from .costs import CostLedger
-    from .kdp import generate_kdp_metadata, build_kdp_kit
+    from .kdp import generate_kdp_metadata, generate_marketing, build_kdp_kit
 
     settings = _make_settings(args)
     store = BookStore(args.project)
@@ -128,8 +128,10 @@ def cmd_kdp(args) -> int:
         print("warning: no chapters written yet; the EPUB will be empty. "
               "Run 'write' first for a complete kit.")
 
+    ledger = CostLedger()
+    llm = _make_llm(args)
     meta = generate_kdp_metadata(
-        _make_llm(args), settings, CostLedger(), graph,
+        llm, settings, ledger, graph,
         author_first=args.author_first,
         author_last=args.author_last,
         language=args.language or "English",
@@ -137,8 +139,18 @@ def cmd_kdp(args) -> int:
         series=args.series or "",
         edition=args.edition or "",
     )
+    # Marketing copy (blurbs / A+ modules / bio / taglines) for the kit. Skip
+    # only if explicitly disabled; it shares the same LLM/ledger as the metadata.
+    marketing = None
+    if not getattr(args, "no_marketing", False):
+        marketing = generate_marketing(llm, settings, ledger, graph, meta)
+
     out_dir = os.path.join(args.project, "kdp")
-    kit = build_kdp_kit(graph, meta, out_dir)
+    kit = build_kdp_kit(
+        graph, meta, out_dir,
+        trim=(6.0, 9.0), paper=args.paper or "white",
+        marketing=marketing,
+    )
 
     print(f"\nKDP kit written to {out_dir}")
     print(f"  Title:      {meta.full_title()}")
@@ -146,8 +158,57 @@ def cmd_kdp(args) -> int:
     print(f"  Keywords:   {len(meta.keywords)} / 7")
     print(f"  Categories: {len(meta.categories)} / 3")
     print(f"  EPUB:       {kit['paths']['epub']}")
+    print(f"  Interior:   {kit['paths']['docx']}")
+    print(f"  Print spec: {kit['paths']['print_spec']}")
+    print(f"  Print cvr:  {kit['paths']['print_cover']}")
+    if "marketing" in kit["paths"]:
+        print(f"  Marketing:  {kit['paths']['marketing']}")
     print(f"  Listing:    {kit['paths']['listing']}")
     print(f"  Checklist:  {kit['paths']['checklist']}")
+    spec = kit.get("print_spec", {})
+    if spec:
+        print(f"  Pages ~{spec.get('page_count_estimate')}, "
+              f"spine {spec.get('spine_width_in')}in "
+              f"({spec.get('paper')} paper)")
+    return 0
+
+
+def cmd_price(args) -> int:
+    from .royalties import estimate_page_count, estimate_royalties
+
+    store = BookStore(args.project)
+    graph = store.load_graph()
+    if graph is None:
+        raise SystemExit("error: no plan found in project; run 'generate' first")
+
+    pages = estimate_page_count(graph)
+    est = estimate_royalties(
+        list_price=args.list_price,
+        marketplace=args.marketplace or "US",
+        page_count=pages,
+        paper=args.paper or "white",
+    )
+    eb = est["ebook"]
+    pb = est["paperback"]
+    cur = "$"
+    print(f"Royalty estimate for {args.project} "
+          f"(list ${args.list_price:.2f}, {args.marketplace}, {args.paper} paper)\n")
+    print(f"  EBOOK     plan {eb['plan']:<4} "
+          f"royalty/sale {cur}{eb['royalty_per_sale']:.2f} "
+          f"(delivery fee {cur}{eb['delivery_fee']:.2f})")
+    alt = eb.get("alternate_plan", {})
+    if alt:
+        elig = "" if alt.get("eligible", True) else " [ineligible]"
+        print(f"            alt {alt.get('plan',''):<4} "
+              f"royalty/sale {cur}{alt.get('royalty_per_sale', 0):.2f}{elig}")
+    print(f"  PAPERBACK ~{pb['page_count']} pages, "
+          f"print cost {cur}{pb['printing_cost']:.2f}, "
+          f"royalty/sale {cur}{pb['royalty_per_sale']:.2f}"
+          f"{'  [below print cost!]' if pb['below_cost'] else ''}")
+    print("\nAssumptions:")
+    for a in est["assumptions"]:
+        print(f"  - {a}")
+    print(f"\n({est['note']})")
     return 0
 
 
@@ -212,7 +273,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--series", default="", help="optional series name")
     sp.add_argument("--edition", default="", help="optional edition number")
     sp.add_argument("--language", default="English", help="book language (default English)")
+    sp.add_argument("--paper", default="white", choices=["white", "cream"],
+                    help="paperback paper stock for print spec/cover (default white)")
+    sp.add_argument("--no-marketing", action="store_true",
+                    help="skip generating marketing copy (blurbs/A+/bio/taglines)")
     sp.set_defaults(func=cmd_kdp)
+
+    sp = sub.add_parser("price", help="estimate ebook + paperback KDP royalties for a list price")
+    add_common(sp, generating=False)
+    sp.add_argument("--list-price", type=float, required=True,
+                    help="retail list price, e.g. 4.99")
+    sp.add_argument("--marketplace", default="US", help="marketplace code (default US)")
+    sp.add_argument("--paper", default="white", choices=["white", "cream"],
+                    help="paperback paper stock (default white)")
+    sp.set_defaults(func=cmd_price)
 
     sp = sub.add_parser("profiles", help="list quality profiles and pricing")
     sp.set_defaults(func=cmd_profiles)

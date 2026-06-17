@@ -9,9 +9,9 @@
 A local‑first book‑generation studio with a beautiful editorial UI, an HTTP API, and a Model‑Context‑Protocol server — so a human *or an AI agent* can use it as a tool.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-49%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-72%20passing-2ea44f)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-![MCP](https://img.shields.io/badge/MCP-13%20tools-7c3aed)
+![MCP](https://img.shields.io/badge/MCP-17%20tools-7c3aed)
 ![KDP](https://img.shields.io/badge/Amazon%20KDP-fast%20publish-FF9900?logo=amazon&logoColor=white)
 ![Build](https://img.shields.io/badge/build-none%20%C2%B7%20vanilla%20JS-orange)
 ![Design panel](https://img.shields.io/badge/design%20panel-9%2F10-e8624e)
@@ -50,7 +50,7 @@ Most "AI writer" apps give you a chat box and a wall of text. BookwriterPro give
 - 🕸️ **See the story's web.** A live character‑relationship graph: clean at rest, revealing each character's ties on hover.
 - ⌨️ **⌘K everything.** A Linear/Raycast‑class command palette to jump anywhere.
 - 🌗 **Gorgeous in light *and* dark.** A true warm‑paper / espresso re‑theme, not a lazy invert. Fully responsive down to mobile.
-- 🤖 **An agent can drive the whole thing** — write *and* publish — via 13 MCP tools or a clean HTTP/OpenAPI API.
+- 🤖 **An agent can drive the whole thing** — write *and* publish — via 17 MCP tools or a clean HTTP/OpenAPI API.
 
 > A panel of independent design critics scored the rendered UI a **9/10 — "a polished, premium, shipped product."**
 
@@ -103,9 +103,9 @@ pip install -e ".[mcp]"
 python -m bookwriter.mcp_server     # stdio MCP server
 ```
 
-**13 tools**, all sharing the same data store as the web app (a book an agent creates shows up in the UI, and vice‑versa):
+**17 tools**, all sharing the same data store as the web app (a book an agent creates shows up in the UI, and vice‑versa):
 
-`list_profiles` · `list_books` · `create_book` · `write_book` · `write_chapter` · `get_status` · `get_chapter` · `get_graph` · `get_cost` · `get_manuscript` · `prepare_kdp` · `export_epub` · `get_kdp_listing`
+`list_profiles` · `list_books` · `create_book` · `write_book` · `write_chapter` · `get_status` · `get_chapter` · `get_graph` · `get_cost` · `get_manuscript` · `prepare_kdp` · `export_epub` · `export_docx` · `print_spec` · `estimate_royalties` · `generate_marketing` · `get_kdp_listing`
 
 Claude Desktop config and details: **[`docs/MCP.md`](docs/MCP.md)**.
 
@@ -140,25 +140,28 @@ Generation is **resumable** — it saves after every chapter, so an interrupted 
 
 </div>
 
-Go from finished manuscript to a **ready-to-upload KDP listing in minutes.** Hit **Publish to KDP** in the studio and BookwriterPro builds the whole kit:
+Go from finished manuscript to a **ready-to-upload KDP listing in minutes.** Hit **Publish to KDP** in the studio and BookwriterPro builds the whole kit — **eBook *and* paperback**:
 
 - **✨ Auto-fill every KDP page‑1 field with AI** — a ≤4000‑char marketing description, up to **7 keyword‑rules‑compliant keywords**, up to **3 categories**, subtitle, series/edition — all editable, with live counters and inline validation.
-- **A valid EPUB** of your book (pure‑stdlib builder — proper `mimetype`, nav/TOC, embedded cover; uploads straight to KDP).
-- **A KDP‑ready cover** exported to a high‑res PNG (~2560px) right from the browser.
-- **A copy‑paste listing** + a step‑by‑step **CHECKLIST.md** so you just paste, upload, price, and publish.
-- One‑click **Open Amazon KDP**, and a built‑in tip for the `StorytellerUK2026` contest keyword.
+- **📗 eBook** — a valid **EPUB** (pure‑stdlib builder: proper `mimetype`, nav/TOC, embedded cover; uploads straight to KDP) and a **KDP‑ready cover** exported to a high‑res PNG (~2560px) right in the browser.
+- **📕 Paperback** — a print‑ready **6×9 DOCX interior** plus a computed **print spec** (estimated page count, spine width, full‑wrap cover dimensions) and a print‑cover SVG to start from.
+- **💵 Pricing & royalties** — type a list price and see estimated **eBook (70%/35%)** and **paperback** royalties per sale (printing cost included) for your marketplace.
+- **📣 Marketing copy** — one click generates **back‑cover blurb variants, A+ content modules, an author bio, and taglines** (pick a blurb → it fills your description).
+- **A copy‑paste listing** + a step‑by‑step **CHECKLIST.md**, one‑click **Open Amazon KDP**, and a built‑in tip for the `StorytellerUK2026` contest keyword.
 
 Prefer the terminal or an agent?
 
 ```bash
-# CLI: build the full KDP kit (EPUB + listing + checklist) into ./book/kdp/
-python -m bookwriter kdp --project ./book --author-first Vera --author-last Solenne
+# CLI: build the full KDP kit (EPUB + DOCX + cover + listing + marketing) into ./book/kdp/
+python -m bookwriter kdp   --project ./book --author-first Vera --author-last Solenne
+python -m bookwriter price --project ./book --list-price 4.99      # royalty estimate
 
-# Or just export the EPUB via the API
-curl -OJ "http://127.0.0.1:8000/api/books/<id>/export/epub?download=1"
+# Or hit the API directly
+curl -OJ "http://127.0.0.1:8000/api/books/<id>/export/epub?download=1"   # eBook
+curl -OJ "http://127.0.0.1:8000/api/books/<id>/export/docx?download=1"   # paperback interior
 ```
 
-Agents can do it too — the MCP server exposes `prepare_kdp`, `export_epub`, and `get_kdp_listing`.
+Agents can do all of it — the MCP server exposes `prepare_kdp`, `export_epub`, `export_docx`, `print_spec`, `estimate_royalties`, `generate_marketing`, and `get_kdp_listing`.
 
 > KDP has no public publishing API, so the final upload is yours to click — but everything you need is generated and waiting.
 
@@ -201,7 +204,7 @@ Three surfaces over one engine: a **vanilla, no‑build web SPA**, a **FastAPI H
 ## 🧪 Tested & solid
 
 ```bash
-python -m unittest discover -s tests      # 49 tests, runs fully offline (mock model)
+python -m unittest discover -s tests      # 72 tests, runs fully offline (mock model)
 ```
 
 The whole package imports and its test suite runs with **zero third‑party installs** (the LLM client is mockable). Server/MCP tests skip cleanly if those extras aren't installed.
@@ -219,10 +222,10 @@ bookwriter/
   mock.py        offline MockLLM (demo mode + tests)
   server/        FastAPI app, service layer, SSE event broker
   serve.py       `python -m bookwriter.serve`
-  mcp_server.py  MCP stdio server (10 tools)
+  mcp_server.py  MCP stdio server (17 tools)
   web/           the studio UI (index.html, styles.css, app.js, covers.js, palette.js)
 docs/            ARCHITECTURE.md · MCP.md · screenshots/
-tests/           37 offline tests
+tests/           72 offline tests
 ```
 
 ---

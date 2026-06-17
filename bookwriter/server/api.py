@@ -24,7 +24,13 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 
 from .broker import EventBroker, TERMINAL_TYPES
-from .schemas import CreateBookRequest, KdpRequest, WriteRequest
+from .schemas import (
+    CreateBookRequest,
+    KdpRequest,
+    MarketingRequest,
+    PricingRequest,
+    WriteRequest,
+)
 from .service import BookService, ServiceError
 
 # Heartbeat interval (seconds) for the SSE stream.
@@ -156,6 +162,42 @@ def create_app(data_dir: str | None = None) -> FastAPI:
             filename=fname,
             headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
+
+    # -- Print / pricing / marketing -----------------------------------
+    @app.get("/api/books/{book_id}/export/docx")
+    async def export_docx(book_id: str) -> FileResponse:
+        path = await asyncio.to_thread(service.export_docx_path, book_id)
+        fname = service.docx_filename(book_id)
+        return FileResponse(
+            path,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            filename=fname,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+
+    @app.get("/api/books/{book_id}/print")
+    async def get_print(book_id: str) -> Dict[str, Any]:
+        return {"spec": service.print_spec(book_id)}
+
+    @app.api_route("/api/books/{book_id}/export/print-cover", methods=["GET", "HEAD"])
+    async def export_print_cover(book_id: str) -> Response:
+        svg = await asyncio.to_thread(service.print_cover_svg, book_id)
+        fname = service.docx_filename(book_id).replace(".docx", "-print-cover.svg")
+        return Response(
+            content=svg,
+            media_type="image/svg+xml",
+            headers={"Content-Disposition": f'inline; filename="{fname}"'},
+        )
+
+    @app.post("/api/books/{book_id}/pricing")
+    async def pricing(book_id: str, req: PricingRequest) -> Dict[str, Any]:
+        return {"pricing": service.estimate_pricing(book_id, req)}
+
+    @app.post("/api/books/{book_id}/marketing")
+    async def marketing(book_id: str, req: MarketingRequest) -> Dict[str, Any]:
+        # Generation may call the model + writes marketing.json; run off the loop.
+        result = await asyncio.to_thread(service.generate_marketing, book_id, req)
+        return {"marketing": result}
 
     @app.delete("/api/books/{book_id}")
     async def delete_book(book_id: str) -> Dict[str, Any]:

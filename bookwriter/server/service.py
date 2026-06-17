@@ -33,7 +33,10 @@ from ..kdp import (
     build_epub,
     build_kdp_kit,
     generate_kdp_metadata,
+    generate_marketing as _generate_marketing,
 )
+from ..print_export import build_docx, print_spec as _print_spec, build_print_cover_svg
+from ..royalties import estimate_page_count, estimate_royalties
 from ..mock import MockLLM
 from ..pipeline import BookPipeline
 from ..store import BookStore
@@ -482,11 +485,14 @@ class BookService:
 
         return {"metadata": meta_dict, "listing": listing, "paths": result["paths"]}
 
-    def get_kdp(self, book_id: str) -> Dict[str, Any]:
+    def get_kdp(self, book_id: str):
+        # Returns the saved KDP metadata, or None if it hasn't been prepared yet.
+        # (None — not a 404 — so the Publish page can probe it on mount without a
+        # noisy console error; the book itself still 404s via _require_meta.)
         self._require_meta(book_id)
         path = self._kdp_json_path(book_id)
         if not os.path.isfile(path):
-            raise ServiceError(404, f"Book {book_id!r} has no KDP metadata; prepare it first.")
+            return None
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -531,6 +537,105 @@ class BookService:
     def epub_filename(self, book_id: str) -> str:
         meta = self._require_meta(book_id)
         return f"{_slug(meta.get('title') or book_id)}.epub"
+
+    # ------------------------------------------------------------------ #
+    # Print / pricing / marketing
+    # ------------------------------------------------------------------ #
+    def _load_kdp_meta(self, book_id: str, meta: Dict[str, Any], graph) -> KdpMetadata:
+        """Saved KDP metadata if a prior prepare ran, else minimal fallback."""
+        kdp_json = self._kdp_json_path(book_id)
+        if os.path.isfile(kdp_json):
+            with open(kdp_json, "r", encoding="utf-8") as f:
+                return KdpMetadata.from_dict(json.load(f))
+        return KdpMetadata(
+            title=meta.get("title") or graph.bible.title or "Untitled",
+            author_first="",
+            author_last="",
+        )
+
+    def export_docx_path(self, book_id: str) -> str:
+        """Path to a built print interior .docx, building it on demand."""
+        meta = self._require_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        if not graph.chapters:
+            raise ServiceError(404, f"Book {book_id!r} has no written chapters.")
+
+        kdp_meta = self._load_kdp_meta(book_id, meta, graph)
+        out_dir = self._kdp_dir(book_id)
+        os.makedirs(out_dir, exist_ok=True)
+        docx = os.path.join(out_dir, "interior.docx")
+        with open(docx, "wb") as f:
+            f.write(build_docx(graph, kdp_meta))
+        return docx
+
+    def docx_filename(self, book_id: str) -> str:
+        meta = self._require_meta(book_id)
+        return f"{_slug(meta.get('title') or book_id)}.docx"
+
+    def print_spec(self, book_id: str) -> Dict[str, Any]:
+        meta = self._require_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        kdp_meta = self._load_kdp_meta(book_id, meta, graph)
+        return _print_spec(graph, kdp_meta)
+
+    def print_cover_svg(self, book_id: str) -> str:
+        """Full-wrap print-cover SVG (back blurb + spine + front), embedding the
+        saved procedural front cover if a prior prepare produced one."""
+        meta = self._require_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        kdp_meta = self._load_kdp_meta(book_id, meta, graph)
+        spec = _print_spec(graph, kdp_meta)
+        front = None
+        cover_path = os.path.join(self._kdp_dir(book_id), "cover.svg")
+        if os.path.isfile(cover_path):
+            with open(cover_path, "r", encoding="utf-8") as f:
+                front = f.read()
+        return build_print_cover_svg(graph, kdp_meta, spec, front_cover_svg=front)
+
+    def estimate_pricing(self, book_id: str, req: "PricingRequest") -> Dict[str, Any]:  # type: ignore[name-defined]
+        self._require_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        pages = estimate_page_count(graph)
+        return estimate_royalties(
+            list_price=req.list_price,
+            marketplace=req.marketplace or "US",
+            page_count=pages,
+            paper=req.paper or "white",
+        )
+
+    def generate_marketing(self, book_id: str, req: "MarketingRequest") -> Dict[str, Any]:  # type: ignore[name-defined]
+        meta = self._require_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        if not graph.chapters:
+            raise ServiceError(404, f"Book {book_id!r} has no written chapters.")
+
+        # Pick the LLM: explicit req.mock wins; else mock unless a key is set.
+        if req.mock is None:
+            mock = bool(meta.get("mock", False)) or not self.has_api_key()
+        else:
+            mock = bool(req.mock)
+        if not mock and not self.has_api_key():
+            raise ServiceError(
+                400,
+                "No ANTHROPIC_API_KEY set; enable demo mode (mock) or set a key.",
+            )
+
+        kdp_meta = self._load_kdp_meta(book_id, meta, graph)
+        settings = self._make_settings(meta, book_id)
+        llm = self._make_llm(mock)
+        ledger = CostLedger()
+
+        try:
+            marketing = _generate_marketing(llm, settings, ledger, graph, kdp_meta)
+        except Exception as e:  # noqa: BLE001 - surfaced to client
+            raise ServiceError(500, f"Marketing generation failed: {e}")
+
+        # Persist a marketing.json snapshot in the book dir.
+        path = os.path.join(self._book_dir(book_id), "marketing.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(marketing, f, indent=2, ensure_ascii=False)
+
+        return marketing
 
     # ------------------------------------------------------------------ #
     # Delete
