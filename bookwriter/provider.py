@@ -27,6 +27,7 @@ import shlex
 import shutil
 from typing import List, Optional
 
+from . import runtime_config as rc
 from .config import MODEL_PRICES, ModelPrice
 
 # --------------------------------------------------------------------------- #
@@ -72,7 +73,7 @@ def normalize_provider(raw: Optional[str]) -> str:
 
 def provider_name() -> str:
     """Normalized provider id from ``BOOKWRITER_LLM_PROVIDER`` (default anthropic)."""
-    return normalize_provider(os.environ.get("BOOKWRITER_LLM_PROVIDER"))
+    return normalize_provider(rc.getenv("BOOKWRITER_LLM_PROVIDER"))
 
 
 # Stages whose model a per-book "Text model" pick should override. The cheap,
@@ -142,7 +143,7 @@ _CLI_CMD_ENV = {
 
 def cli_command(provider: str) -> List[str]:
     """Resolve the argv for a CLI-backed provider (env override wins)."""
-    override = os.environ.get(_CLI_CMD_ENV.get(provider, ""))
+    override = rc.getenv(_CLI_CMD_ENV.get(provider, ""))
     if override:
         return shlex.split(override, posix=(os.name != "nt"))
     return list(_CLI_DEFAULTS.get(provider, []))
@@ -157,7 +158,7 @@ _ENV_BY_TIER = {
 def target_model(provider: str, anthropic_model: str) -> str:
     """Translate an Anthropic profile model id into the id to send to *provider*."""
     tier = tier_of(anthropic_model)
-    override = os.environ.get(_ENV_BY_TIER[tier])
+    override = rc.getenv(_ENV_BY_TIER[tier])
     if override:
         return override
     table = _PROVIDER_DEFAULTS.get(provider)
@@ -184,23 +185,82 @@ for _mid, _price in _EXTRA_PRICES.items():
 # --------------------------------------------------------------------------- #
 
 def _claude_binary() -> Optional[str]:
-    return os.environ.get("BOOKWRITER_CLAUDE_BIN") or shutil.which("claude")
+    return rc.getenv("BOOKWRITER_CLAUDE_BIN") or shutil.which("claude")
 
 
 def live_available(provider: Optional[str] = None) -> bool:
     """True when the selected provider has the credentials/binary it needs."""
     p = provider or provider_name()
     if p == "openai":
-        return bool(os.environ.get("OPENAI_API_KEY"))
+        return bool(rc.getenv("OPENAI_API_KEY"))
     if p == "openrouter":
-        return bool(os.environ.get("OPENROUTER_API_KEY"))
+        return bool(rc.getenv("OPENROUTER_API_KEY"))
     if p == "claude-cli":
         return _claude_binary() is not None
     if p in _CLI_PROVIDERS:  # codex / grok-cli / cli
         cmd = cli_command(p)
         return bool(cmd) and shutil.which(cmd[0]) is not None
     # anthropic (default / unknown)
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+    return bool(rc.getenv("ANTHROPIC_API_KEY"))
+
+
+def _http_status(url: str, headers: dict, timeout: float = 12.0) -> tuple:
+    """(status_code or None, error_text). Stdlib only."""
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.getcode(), ""
+    except urllib.error.HTTPError as e:
+        return e.code, (e.read()[:200].decode("utf-8", "replace") if e.fp else "")
+    except Exception as e:  # noqa: BLE001 - network/DNS/timeout
+        return None, str(e)
+
+
+def verify(provider: Optional[str] = None) -> dict:
+    """Actively check whether the selected provider's account is usable.
+
+    Returns ``{"ok": bool, "detail": str}``. API providers make a cheap
+    authenticated GET; subscription CLIs check the signed-in binary is present.
+    """
+    p = provider or provider_name()
+    if p in ("openai", "openrouter") and not live_available(p):
+        return {"ok": False, "detail": "No API key set."}
+    if p == "anthropic":
+        key = rc.getenv("ANTHROPIC_API_KEY")
+        if not key:
+            return {"ok": False, "detail": "No API key set."}
+        code, err = _http_status("https://api.anthropic.com/v1/models",
+                                  {"x-api-key": key, "anthropic-version": "2023-06-01"})
+        if code == 200:
+            return {"ok": True, "detail": "Anthropic API reachable — key valid."}
+        if code in (401, 403):
+            return {"ok": False, "detail": "Key rejected (401/403)."}
+        return {"ok": False, "detail": err or f"HTTP {code}."}
+    if p == "openai":
+        base = (rc.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1") or "").rstrip("/")
+        code, err = _http_status(f"{base}/models",
+                                  {"Authorization": f"Bearer {rc.getenv('OPENAI_API_KEY')}"})
+        return ({"ok": True, "detail": "OpenAI API reachable — key valid."} if code == 200
+                else {"ok": False, "detail": ("Key rejected." if code in (401, 403) else err or f"HTTP {code}.")})
+    if p == "openrouter":
+        code, err = _http_status("https://openrouter.ai/api/v1/key",
+                                  {"Authorization": f"Bearer {rc.getenv('OPENROUTER_API_KEY')}"})
+        return ({"ok": True, "detail": "OpenRouter reachable — key valid."} if code == 200
+                else {"ok": False, "detail": ("Key rejected." if code in (401, 403) else err or f"HTTP {code}.")})
+    if p in _CLI_PROVIDERS:
+        if p == "claude-cli":
+            found = _claude_binary()
+            label = "claude"
+        else:
+            cmd = cli_command(p)
+            found = (shutil.which(cmd[0]) if cmd else None)
+            label = " ".join(cmd) if cmd else "(no command configured)"
+        if found:
+            return {"ok": True, "detail": f"CLI found: {label}. Make sure it's signed in to your subscription."}
+        return {"ok": False, "detail": f"CLI not found on PATH: {label}."}
+    return {"ok": False, "detail": f"Unknown provider '{p}'."}
 
 
 def missing_credentials_message(provider: Optional[str] = None) -> str:
@@ -243,16 +303,16 @@ def make_llm(mock: bool = False, provider: Optional[str] = None,
     if p == "openai":
         from .llm_openai import OpenAICompatLLM
         return OpenAICompatLLM(
-            api_key=os.environ.get("OPENAI_API_KEY"),
-            base_url=os.environ.get("OPENAI_BASE_URL"),
+            api_key=rc.getenv("OPENAI_API_KEY"),
+            base_url=rc.getenv("OPENAI_BASE_URL"),
             provider="openai",
             model_override=model,
         )
     if p == "openrouter":
         from .llm_openai import OpenAICompatLLM
         return OpenAICompatLLM(
-            api_key=os.environ.get("OPENROUTER_API_KEY"),
-            base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+            api_key=rc.getenv("OPENROUTER_API_KEY"),
+            base_url=rc.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             provider="openrouter",
             model_override=model,
         )
@@ -261,12 +321,12 @@ def make_llm(mock: bool = False, provider: Optional[str] = None,
         return ClaudeCliLLM(binary=_claude_binary(), model_override=model)
     if p in _CLI_PROVIDERS:  # codex / grok-cli / cli
         from .llm_cli import GenericCliLLM
-        model_flag = os.environ.get("BOOKWRITER_CLI_MODEL_FLAG") or None
+        model_flag = rc.getenv("BOOKWRITER_CLI_MODEL_FLAG") or None
         return GenericCliLLM(command=cli_command(p), provider=p,
                              model_flag=model_flag, model_override=model)
 
     from .llm import AnthropicLLM
-    return AnthropicLLM(api_key=os.environ.get("ANTHROPIC_API_KEY"), model_override=model)
+    return AnthropicLLM(api_key=rc.getenv("ANTHROPIC_API_KEY"), model_override=model)
 
 
 # --------------------------------------------------------------------------- #

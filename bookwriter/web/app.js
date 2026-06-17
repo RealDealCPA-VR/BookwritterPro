@@ -28,6 +28,9 @@ const API = {
   health: () => API._json("GET", "/health"),
   profiles: () => API._json("GET", "/profiles"),
   providers: () => API._json("GET", "/providers"),
+  settings: () => API._json("GET", "/settings"),
+  saveSettings: (values) => API._json("PUT", "/settings", { values }),
+  testProvider: (kind, provider) => API._json("POST", "/settings/test", { kind, provider }),
   books: () => API._json("GET", "/books"),
   book: (id) => API._json("GET", `/books/${id}`),
   createBook: (payload) => API._json("POST", "/books", payload),
@@ -392,8 +395,31 @@ function bookCard(b) {
   const costEl = $(".card-cost", card);
   if (costEl) costEl.textContent = b.mock ? "Demo" : (done >= total && total ? "Complete" : "In progress");
 
+  const del = $(".card-delete", card);
+  if (del) del.addEventListener("click", (e) => {
+    // The card is an <a>; don't navigate when deleting.
+    e.preventDefault(); e.stopPropagation();
+    deleteBookFromLibrary(b, card);
+  });
+
   attachTilt(card);
   return card;
+}
+
+async function deleteBookFromLibrary(b, card) {
+  const title = b.title || "this book";
+  if (!window.confirm(`Delete “${title}”?\n\nThis permanently removes the book, its chapters, and any generated images. This cannot be undone.`)) return;
+  card.classList.add("is-deleting");
+  try {
+    await API.deleteBook(b.id);
+    toast("Book deleted.", { title: title, type: "info" });
+    // Re-render the library so stats/hero update too.
+    if (location.hash.replace(/^#/, "").replace(/\/$/, "") === "" || location.hash === "") Views.library();
+    else Router.go("#/");
+  } catch (err) {
+    card.classList.remove("is-deleting");
+    toast(err.message || "Could not delete the book.", { title: "Delete failed", type: "error" });
+  }
 }
 
 /* Render a procedural cover into a holder element (no-op if Covers missing). */
@@ -890,6 +916,169 @@ function bindForge(node, seed) {
   typeEl && typeEl.addEventListener("change", render);
   render();
 }
+
+/* ========================== SETTINGS (modal) ========================== */
+// In-app API-key + provider configuration. Keys are stored server-side in the
+// data folder (masked in responses); saving takes effect immediately. Each key
+// row has a Test button that verifies the account is actually reachable.
+const SettingsModal = {
+  el: null, lastFocused: null, data: null,
+  KEYS: [
+    { name: "ANTHROPIC_API_KEY", label: "Anthropic API key", kind: "llm", provider: "anthropic", ph: "sk-ant-…" },
+    { name: "OPENAI_API_KEY", label: "OpenAI API key", kind: "llm", provider: "openai", ph: "sk-…" },
+    { name: "OPENROUTER_API_KEY", label: "OpenRouter API key", kind: "llm", provider: "openrouter", ph: "sk-or-…" },
+    { name: "PIXIO_API_KEY", label: "Pixio API key — chapter images", kind: "image", provider: "pixio", ph: "pxio_live_…" },
+  ],
+
+  async open() {
+    if (SettingsModal.el) return;
+    SettingsModal.lastFocused = document.activeElement;
+    const node = tpl("tpl-settings");
+    document.body.appendChild(node);
+    document.body.classList.add("cmdk-lock");
+    SettingsModal.el = node;
+
+    node.addEventListener("mousedown", (e) => { if (e.target === node) SettingsModal.close(); });
+    node.querySelector(".set-close").addEventListener("click", () => SettingsModal.close());
+    node.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); SettingsModal.close(); } });
+    node.querySelector("#set-save").addEventListener("click", () => SettingsModal.save(node));
+    node.querySelector("#set-img").addEventListener("change", () => SettingsModal.toggleHttp(node));
+
+    try { SettingsModal.data = await API.settings(); }
+    catch (e) { SettingsModal.data = null; node.querySelector("#set-note").textContent = "Couldn't load settings: " + (e.message || e); }
+    if (SettingsModal.data) SettingsModal.render(node);
+
+    if (!reduceMotion()) requestAnimationFrame(() => node.classList.add("is-open"));
+    else node.classList.add("is-open");
+  },
+
+  close() {
+    const node = SettingsModal.el;
+    if (!node) return;
+    SettingsModal.el = null;
+    if (!document.querySelector(".cmdk-overlay, .help-overlay, .create-overlay:not(.settings-overlay)")) {
+      document.body.classList.remove("cmdk-lock");
+    }
+    const finish = () => node.remove();
+    if (reduceMotion()) finish();
+    else { node.classList.remove("is-open"); node.classList.add("is-closing"); setTimeout(finish, 280); }
+    const prev = SettingsModal.lastFocused; SettingsModal.lastFocused = null;
+    if (prev && prev.focus && document.contains(prev)) { try { prev.focus(); } catch {} }
+  },
+
+  render(node) {
+    const d = SettingsModal.data;
+    // Default writing-model select.
+    const llm = node.querySelector("#set-llm");
+    llm.innerHTML = "";
+    (d.llm.providers || []).forEach((p) => {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = p.label + (p.available ? " ✓" : "");
+      llm.appendChild(o);
+    });
+    llm.value = d.options.BOOKWRITER_LLM_PROVIDER || d.llm.selected || "anthropic";
+
+    // Image provider + custom-http fields.
+    node.querySelector("#set-img").value = d.options.BOOKWRITER_IMAGE_PROVIDER || d.image.provider || "pixio";
+    SettingsModal.toggleHttp(node);
+    node.querySelector("#set-img-hint").textContent = d.image.available
+      ? `Active backend: ${d.image.provider}.`
+      : `No image backend configured — chapter images will be skipped until you add a key.`;
+
+    // Prefill every [data-opt] field from saved options.
+    node.querySelectorAll("[data-opt]").forEach((el) => {
+      const k = el.getAttribute("data-opt");
+      if (k in d.options && d.options[k]) el.value = d.options[k];
+    });
+
+    // Key rows.
+    const wrap = node.querySelector("#set-keys");
+    wrap.innerHTML = "";
+    SettingsModal.KEYS.forEach((k) => {
+      const info = d.keys[k.name] || { set: false, masked: "" };
+      const row = document.createElement("div");
+      row.className = "set-key-row";
+      row.dataset.key = k.name; row.dataset.kind = k.kind; row.dataset.provider = k.provider;
+      row.innerHTML =
+        `<div class="set-key-head"><label>${esc(k.label)}</label>` +
+        `<span class="set-badge ${info.set ? "is-saved" : "is-unset"}">${info.set ? "Saved" : "Not set"}</span></div>` +
+        `<div class="set-key-input">` +
+        `<input type="password" autocomplete="off" spellcheck="false" data-secret="${esc(k.name)}" ` +
+        `placeholder="${info.set ? `Saved (${esc(info.masked)}) — type to replace` : esc(k.ph)}">` +
+        `<button type="button" class="btn btn-ghost set-test">Test</button>` +
+        (info.set ? `<button type="button" class="btn-link set-clear">Clear</button>` : "") +
+        `</div><p class="field-hint set-key-detail" hidden></p>`;
+      row.querySelector(".set-test").addEventListener("click", () => SettingsModal.test(node, row));
+      const clr = row.querySelector(".set-clear");
+      if (clr) clr.addEventListener("click", () => SettingsModal.clearKey(node, k.name));
+      wrap.appendChild(row);
+    });
+  },
+
+  toggleHttp(node) {
+    node.querySelector("#set-http").hidden = node.querySelector("#set-img").value !== "http";
+  },
+
+  collectValues(node) {
+    const values = {};
+    node.querySelectorAll("[data-opt]").forEach((el) => { values[el.getAttribute("data-opt")] = el.value.trim(); });
+    node.querySelectorAll("[data-secret]").forEach((el) => {
+      const v = el.value.trim();
+      if (v) values[el.getAttribute("data-secret")] = v;  // empty = leave unchanged
+    });
+    return values;
+  },
+
+  async save(node, opts) {
+    opts = opts || {};
+    const btn = node.querySelector("#set-save");
+    const note = node.querySelector("#set-note");
+    note.textContent = ""; note.classList.remove("is-error");
+    btn.classList.add("is-busy"); btn.disabled = true;
+    try {
+      SettingsModal.data = await API.saveSettings(SettingsModal.collectValues(node));
+      SettingsModal.render(node);               // re-render: fresh masks + badges
+      CreateModal.catalog = null;               // make the create modal re-fetch providers
+      refreshHealth();
+      if (!opts.silent) toast("Settings saved.", { title: "Saved", type: "good" });
+    } catch (e) {
+      note.textContent = e.message || "Could not save settings."; note.classList.add("is-error");
+      if (!opts.silent) toast(note.textContent, { title: "Save failed", type: "error" });
+      throw e;
+    } finally {
+      btn.classList.remove("is-busy"); btn.disabled = false;
+    }
+  },
+
+  async clearKey(node, name) {
+    try {
+      SettingsModal.data = await API.saveSettings({ [name]: "" });
+      SettingsModal.render(node);
+      CreateModal.catalog = null; refreshHealth();
+      toast("Key cleared.", { type: "info" });
+    } catch (e) { toast(e.message || "Could not clear key.", { type: "error" }); }
+  },
+
+  async test(node, row) {
+    const badge = row.querySelector(".set-badge");
+    const detail = row.querySelector(".set-key-detail");
+    const kind = row.dataset.kind, provider = row.dataset.provider;
+    badge.className = "set-badge is-testing"; badge.textContent = "Testing…";
+    try {
+      await SettingsModal.save(node, { silent: true });   // test exactly what's entered
+      const r = await API.testProvider(kind, provider);
+      badge.className = "set-badge " + (r.ok ? "is-active" : "is-fail");
+      badge.textContent = r.ok ? "Active" : "Failed";
+      detail.hidden = false; detail.textContent = r.detail || "";
+      detail.classList.toggle("is-error", !r.ok);
+    } catch (e) {
+      badge.className = "set-badge is-fail"; badge.textContent = "Failed";
+      detail.hidden = false; detail.textContent = e.message || "Test failed."; detail.classList.add("is-error");
+    }
+  },
+};
+window.SettingsModal = SettingsModal;
 
 /* ============================== STUDIO ================================= */
 const Studio = {
@@ -2294,10 +2483,9 @@ function boot() {
   // navigating to a page — without changing the hash (deep-linking #/new still
   // works via the router branch above).
   document.addEventListener("click", (e) => {
-    const trigger = e.target.closest && e.target.closest('a[href="#/new"], [data-action="new-book"]');
-    if (!trigger) return;
-    e.preventDefault();
-    CreateModal.open();
+    if (!e.target.closest) return;
+    if (e.target.closest('[data-action="open-settings"]')) { e.preventDefault(); SettingsModal.open(); return; }
+    if (e.target.closest('a[href="#/new"], [data-action="new-book"]')) { e.preventDefault(); CreateModal.open(); }
   });
   Router.start();
 }

@@ -68,6 +68,14 @@
         <span class="dot" aria-hidden="true"></span>
         <span id="api-pill-text">checking…</span>
       </span>
+      <button class="icon-btn" id="settings-btn" type="button"
+              aria-label="Settings" title="Settings — API keys & providers" data-action="open-settings">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M12 2.5l1 2.6 2.7-.7.6 2.7 2.6 1-.7 2.7 1.8 2.1-1.8 2.1.7 2.7-2.6 1-.6 2.7-2.7-.7-1 2.6-1-2.6-2.7.7-.6-2.7-2.6-1 .7-2.7L3.5 12l1.8-2.1-.7-2.7 2.6-1 .6-2.7 2.7.7z"
+                fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" opacity=".55"/>
+        </svg>
+      </button>
       <button class="icon-btn theme-toggle" id="theme-toggle" type="button"
               aria-label="Toggle dark mode" title="Toggle theme">
         <svg class="i-sun" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
@@ -508,6 +516,9 @@
       <div class="card-cover" aria-hidden="true">
         <div class="cover-art" data-cover></div>
         <span class="card-badge card-mock" hidden>Demo</span>
+        <button type="button" class="card-delete" aria-label="Delete book" title="Delete book">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2m-8 0 1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
       </div>
       <div class="card-body">
         <div class="card-top">
@@ -675,6 +686,96 @@
             <p class="composer-note" id="cm-note"></p>
             <button type="submit" form="create-form" class="btn btn-primary btn-lg" id="cm-submit">
               <span class="btn-label">Generate Outline with AI</span>
+              <span class="btn-spinner" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Settings modal — in-app API key + provider configuration. Built/opened by
+       the Settings controller in app.js; key rows render into #set-keys. -->
+  <template id="tpl-settings">
+    <div class="create-overlay settings-overlay" role="dialog" aria-modal="true" aria-labelledby="set-title-h">
+      <div class="create-panel settings-panel" role="document">
+        <div class="create-head">
+          <h2 id="set-title-h" class="serif">Settings</h2>
+          <button type="button" class="help-close set-close" aria-label="Close">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+
+        <div class="create-body settings-body">
+          <form id="settings-form" class="create-form" novalidate>
+            <p class="settings-intro">Connect an account to generate. Keys are stored locally in your data folder and are only ever sent to the provider you pick.</p>
+
+            <div class="field">
+              <label for="set-llm">Default writing model</label>
+              <select id="set-llm" data-opt="BOOKWRITER_LLM_PROVIDER"></select>
+              <p class="field-hint" id="set-llm-hint"></p>
+            </div>
+
+            <fieldset class="field settings-fieldset">
+              <legend>API keys</legend>
+              <div class="settings-keys" id="set-keys"></div>
+            </fieldset>
+
+            <div class="field">
+              <label for="set-img">Chapter image provider</label>
+              <select id="set-img" data-opt="BOOKWRITER_IMAGE_PROVIDER">
+                <option value="pixio">Pixio — default</option>
+                <option value="openai">OpenAI Images</option>
+                <option value="http">Custom HTTP API</option>
+              </select>
+              <p class="field-hint" id="set-img-hint"></p>
+            </div>
+
+            <div id="set-http" hidden>
+              <div class="field">
+                <label for="set-img-url">Image API endpoint (POST)</label>
+                <input id="set-img-url" type="text" data-opt="BOOKWRITER_IMAGE_URL" placeholder="https://api.example.com/v1/images" />
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label for="set-img-auth">Authorization header</label>
+                  <input id="set-img-auth" type="text" data-opt="BOOKWRITER_IMAGE_AUTH" placeholder="Bearer your-key" />
+                </div>
+                <div class="field">
+                  <label for="set-img-path">Result path</label>
+                  <input id="set-img-path" type="text" data-opt="BOOKWRITER_IMAGE_RESULT_PATH" placeholder="data.0.url" />
+                </div>
+              </div>
+              <div class="field">
+                <label for="set-img-body">Request body template</label>
+                <input id="set-img-body" type="text" data-opt="BOOKWRITER_IMAGE_BODY" placeholder='{"prompt": "{prompt}"}' />
+              </div>
+            </div>
+
+            <details class="advanced">
+              <summary>Advanced</summary>
+              <div class="advanced-body">
+                <div class="field-row field-row-3">
+                  <div class="field"><label for="set-m-strong">Strong model</label><input id="set-m-strong" type="text" data-opt="BOOKWRITER_MODEL_STRONG" placeholder="(provider default)" /></div>
+                  <div class="field"><label for="set-m-mid">Mid model</label><input id="set-m-mid" type="text" data-opt="BOOKWRITER_MODEL_MID" placeholder="(provider default)" /></div>
+                  <div class="field"><label for="set-m-cheap">Cheap model</label><input id="set-m-cheap" type="text" data-opt="BOOKWRITER_MODEL_CHEAP" placeholder="(provider default)" /></div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label for="set-codex">Codex CLI command</label><input id="set-codex" type="text" data-opt="BOOKWRITER_CODEX_CMD" placeholder="codex exec" /></div>
+                  <div class="field"><label for="set-grok">Grok CLI command</label><input id="set-grok" type="text" data-opt="BOOKWRITER_GROK_CMD" placeholder="grok" /></div>
+                </div>
+                <div class="field"><label for="set-pixio-model">Pixio model id</label><input id="set-pixio-model" type="text" data-opt="BOOKWRITER_PIXIO_MODEL" placeholder="(auto-discovered)" /></div>
+              </div>
+            </details>
+          </form>
+        </div>
+
+        <div class="create-foot">
+          <p class="create-step">Stored locally · never logged · sent only to your chosen provider.</p>
+          <div class="create-foot-actions">
+            <p class="composer-note" id="set-note"></p>
+            <button type="button" class="btn btn-primary btn-lg" id="set-save">
+              <span class="btn-label">Save settings</span>
               <span class="btn-spinner" aria-hidden="true"></span>
             </button>
           </div>

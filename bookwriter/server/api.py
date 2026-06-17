@@ -29,6 +29,8 @@ from .schemas import (
     KdpRequest,
     MarketingRequest,
     PricingRequest,
+    SettingsUpdate,
+    VerifyRequest,
     WriteRequest,
 )
 from .service import BookService, ServiceError
@@ -49,7 +51,12 @@ def _default_data_dir() -> str:
 
 def create_app(data_dir: str | None = None) -> FastAPI:
     broker = EventBroker()
-    service = BookService(data_dir or _default_data_dir(), broker=broker)
+    resolved_dir = data_dir or _default_data_dir()
+    # Persist in-app Settings (API keys / provider choices) next to the books, and
+    # make every provider read credentials from this store (overrides env).
+    from .. import runtime_config
+    runtime_config.bind_file(os.path.join(resolved_dir, "settings.json"))
+    service = BookService(resolved_dir, broker=broker)
 
     @contextlib.asynccontextmanager
     async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -101,6 +108,19 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         cat = provider_catalog()
         cat["image"] = image_status()  # which image backend is active + usable
         return cat
+
+    @app.get("/api/settings")
+    async def get_settings() -> Dict[str, Any]:
+        return service.get_settings()
+
+    @app.put("/api/settings")
+    async def save_settings(req: SettingsUpdate) -> Dict[str, Any]:
+        return service.save_settings(req.values)
+
+    @app.post("/api/settings/test")
+    async def test_settings(req: VerifyRequest) -> Dict[str, Any]:
+        # Network call — keep it off the event loop.
+        return await asyncio.to_thread(service.verify_provider, req.kind, req.provider)
 
     @app.get("/api/books")
     async def list_books() -> Dict[str, Any]:

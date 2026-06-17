@@ -183,6 +183,38 @@ class BookService:
     # ------------------------------------------------------------------ #
     # Profiles
     # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
+    # Settings (in-app credential / provider configuration)
+    # ------------------------------------------------------------------ #
+    def get_settings(self) -> Dict[str, Any]:
+        from .. import runtime_config as rc
+        from ..provider import provider_catalog
+        from ..images import image_status
+        state = rc.public_state()
+        cat = provider_catalog()
+        return {
+            "keys": state["keys"],
+            "options": state["options"],
+            "llm": {"selected": cat["current"], "providers": cat["providers"]},
+            "image": image_status(),
+        }
+
+    def save_settings(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        from .. import runtime_config as rc
+        rc.set_values(values)
+        return self.get_settings()
+
+    @staticmethod
+    def verify_provider(kind: str, provider: Optional[str]) -> Dict[str, Any]:
+        if kind == "image":
+            from ..images import verify as _verify_image
+            return _verify_image(provider)
+        from ..provider import verify as _verify_llm
+        return _verify_llm(provider)
+
+    # ------------------------------------------------------------------ #
+    # Profiles
+    # ------------------------------------------------------------------ #
     def profiles(self) -> Dict[str, Any]:
         # Contract-authoritative shape: plan/write/extract are BARE model
         # strings; only `check` is an object {model, effort}. This matches the

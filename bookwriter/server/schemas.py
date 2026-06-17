@@ -40,6 +40,16 @@ class WriteRequest(BaseModel):
     restart: bool = False
 
 
+class SettingsUpdate(BaseModel):
+    # Map of managed env-var name -> value ("" / null clears the override).
+    values: Dict[str, Optional[str]] = Field(default_factory=dict)
+
+
+class VerifyRequest(BaseModel):
+    kind: str = "llm"            # "llm" | "image"
+    provider: Optional[str] = None
+
+
 class KdpRequest(BaseModel):
     author_first: str
     author_last: str

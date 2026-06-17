@@ -27,6 +27,8 @@ import urllib.error
 import urllib.request
 from typing import Optional, Tuple
 
+from . import runtime_config as rc
+
 PIXIO_BASE = "https://beta.pixio.myapps.ai"
 
 
@@ -48,7 +50,7 @@ DEFAULT_IMAGE_PROVIDER = "pixio"
 
 
 def image_provider_name() -> str:
-    raw = (os.environ.get("BOOKWRITER_IMAGE_PROVIDER") or DEFAULT_IMAGE_PROVIDER).strip().lower()
+    raw = (rc.getenv("BOOKWRITER_IMAGE_PROVIDER") or DEFAULT_IMAGE_PROVIDER).strip().lower()
     return _ALIASES.get(raw, raw)
 
 
@@ -56,11 +58,11 @@ def image_available(provider: Optional[str] = None) -> bool:
     """True when the selected image backend has the credentials/config it needs."""
     p = provider or image_provider_name()
     if p == "pixio":
-        return bool(os.environ.get("PIXIO_API_KEY"))
+        return bool(rc.getenv("PIXIO_API_KEY"))
     if p == "openai":
-        return bool(os.environ.get("OPENAI_API_KEY"))
+        return bool(rc.getenv("OPENAI_API_KEY"))
     if p == "http":
-        return bool(os.environ.get("BOOKWRITER_IMAGE_URL"))
+        return bool(rc.getenv("BOOKWRITER_IMAGE_URL"))
     return False
 
 
@@ -68,6 +70,31 @@ def image_status() -> dict:
     """Small dict for the UI: which image backend is active and is it usable."""
     p = image_provider_name()
     return {"provider": p, "available": image_available(p)}
+
+
+def verify(provider: Optional[str] = None) -> dict:
+    """Actively check the image backend. {"ok": bool, "detail": str}."""
+    p = provider or image_provider_name()
+    if p == "pixio":
+        key = rc.getenv("PIXIO_API_KEY")
+        if not key:
+            return {"ok": False, "detail": "No PIXIO_API_KEY set."}
+        try:
+            data = _get_json(f"{PIXIO_BASE}/api/v1/credits", {"Authorization": f"Bearer {key}"}, timeout=12.0)
+            bal = data.get("credits", data.get("balance", "?"))
+            return {"ok": True, "detail": f"Pixio reachable — credits: {bal}."}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "detail": str(e)[:200]}
+    if p == "openai":
+        if not rc.getenv("OPENAI_API_KEY"):
+            return {"ok": False, "detail": "No OPENAI_API_KEY set."}
+        from . import provider as _prov
+        return _prov.verify("openai")
+    if p == "http":
+        url = rc.getenv("BOOKWRITER_IMAGE_URL")
+        return ({"ok": True, "detail": f"Custom endpoint configured: {url}"} if url
+                else {"ok": False, "detail": "BOOKWRITER_IMAGE_URL not set."})
+    return {"ok": False, "detail": f"Unknown image provider '{p}'."}
 
 
 def make_image_provider(provider: Optional[str] = None) -> "ImageProvider":
@@ -142,9 +169,9 @@ class PixioImageProvider:
     _discovered_model: Optional[str] = None  # class-level cache across chapters
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.api_key = api_key or os.environ.get("PIXIO_API_KEY") or ""
-        self.model = model or os.environ.get("BOOKWRITER_PIXIO_MODEL") or os.environ.get("PIXIO_IMAGE_MODEL") or ""
-        self.aspect = os.environ.get("BOOKWRITER_IMAGE_ASPECT", "3:2")
+        self.api_key = api_key or rc.getenv("PIXIO_API_KEY") or ""
+        self.model = model or rc.getenv("BOOKWRITER_PIXIO_MODEL") or rc.getenv("PIXIO_IMAGE_MODEL") or ""
+        self.aspect = rc.getenv("BOOKWRITER_IMAGE_ASPECT", "3:2")
 
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.api_key}"}
@@ -209,14 +236,14 @@ class OpenAIImageProvider:
     (default gpt-image-1)."""
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY") or ""
-        self.model = model or os.environ.get("BOOKWRITER_OPENAI_IMAGE_MODEL") or "gpt-image-1"
-        self.size = os.environ.get("BOOKWRITER_OPENAI_IMAGE_SIZE", "1536x1024")
+        self.api_key = api_key or rc.getenv("OPENAI_API_KEY") or ""
+        self.model = model or rc.getenv("BOOKWRITER_OPENAI_IMAGE_MODEL") or "gpt-image-1"
+        self.size = rc.getenv("BOOKWRITER_OPENAI_IMAGE_SIZE", "1536x1024")
 
     def generate(self, prompt: str, *, timeout: float = 180.0) -> Tuple[bytes, str]:
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY is not set.")
-        base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        base = rc.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         resp = _post_json(
             f"{base}/images/generations",
             {"model": self.model, "prompt": prompt, "size": self.size, "n": 1},
@@ -245,11 +272,11 @@ class HttpImageProvider:
     """
 
     def __init__(self):
-        self.url = os.environ.get("BOOKWRITER_IMAGE_URL") or ""
-        self.auth = os.environ.get("BOOKWRITER_IMAGE_AUTH") or ""
-        self.body_tpl = os.environ.get("BOOKWRITER_IMAGE_BODY") or '{"prompt": "{prompt}"}'
-        self.result_path = os.environ.get("BOOKWRITER_IMAGE_RESULT_PATH") or "url"
-        self.result_b64 = bool(os.environ.get("BOOKWRITER_IMAGE_RESULT_B64"))
+        self.url = rc.getenv("BOOKWRITER_IMAGE_URL") or ""
+        self.auth = rc.getenv("BOOKWRITER_IMAGE_AUTH") or ""
+        self.body_tpl = rc.getenv("BOOKWRITER_IMAGE_BODY") or '{"prompt": "{prompt}"}'
+        self.result_path = rc.getenv("BOOKWRITER_IMAGE_RESULT_PATH") or "url"
+        self.result_b64 = bool(rc.getenv("BOOKWRITER_IMAGE_RESULT_B64"))
 
     def generate(self, prompt: str, *, timeout: float = 180.0) -> Tuple[bytes, str]:
         if not self.url:
