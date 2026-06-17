@@ -83,11 +83,24 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     # ================================================================== #
     @app.get("/api/health")
     async def health() -> Dict[str, Any]:
-        return {"status": "ok", "has_api_key": service.has_api_key()}
+        from ..provider import provider_name
+        return {
+            "status": "ok",
+            "has_api_key": service.has_api_key(),
+            "provider": provider_name(),
+        }
 
     @app.get("/api/profiles")
     async def profiles() -> Dict[str, Any]:
         return service.profiles()
+
+    @app.get("/api/providers")
+    async def providers() -> Dict[str, Any]:
+        from ..provider import provider_catalog
+        from ..images import image_status
+        cat = provider_catalog()
+        cat["image"] = image_status()  # which image backend is active + usable
+        return cat
 
     @app.get("/api/books")
     async def list_books() -> Dict[str, Any]:
@@ -109,6 +122,11 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     @app.get("/api/books/{book_id}/chapters/{n}")
     async def get_chapter(book_id: str, n: int) -> Dict[str, Any]:
         return service.get_chapter(book_id, n)
+
+    @app.get("/api/books/{book_id}/chapters/{n}/image")
+    async def get_chapter_image(book_id: str, n: int) -> Response:
+        path, media = service.get_chapter_image(book_id, n)
+        return FileResponse(path, media_type=media)
 
     @app.get("/api/books/{book_id}/graph")
     async def get_graph(book_id: str) -> Dict[str, Any]:

@@ -40,7 +40,8 @@ class BookPipeline:
     def __init__(self, llm: LLM, settings: Settings,
                  progress: Optional[Progress] = None,
                  on_event: Optional[EventSink] = None,
-                 stream_prose: bool = False):
+                 stream_prose: bool = False,
+                 image_provider: Any = None):
         self.llm = llm
         self.settings = settings
         self.ledger = CostLedger()
@@ -49,9 +50,29 @@ class BookPipeline:
         self.progress: Progress = progress or _noop
         self.on_event: EventSink = on_event or _noop_event
         self.stream_prose = stream_prose
+        # Optional image backend (see images.py). Only used when the book opted
+        # into per-chapter illustrations via settings.chapter_images.
+        self.image_provider = image_provider
 
     def _emit(self, **event: Any) -> None:
         self.on_event(event)
+
+    def _maybe_make_image(self, plan) -> bool:
+        """Generate + persist one chapter illustration. Best-effort: any failure
+        is logged and the chapter is kept without an image (never blocks prose)."""
+        if not self.settings.chapter_images or self.image_provider is None:
+            return False
+        assert self.graph is not None
+        try:
+            from .images import build_chapter_prompt
+            prompt = build_chapter_prompt(self.graph.bible, plan)
+            self.progress(f"Chapter {plan.number}: illustrating...")
+            data, ext = self.image_provider.generate(prompt)
+            self.store.save_image(plan.number, data, ext)
+            return True
+        except Exception as e:  # noqa: BLE001 - image is optional, keep writing
+            self.progress(f"  [!] chapter image skipped: {e}")
+            return False
 
     def _cost_snapshot(self) -> Dict[str, Any]:
         return {
@@ -130,9 +151,12 @@ class BookPipeline:
 
             self.store.save_chapter(rec)
             self.store.save_graph(self.graph)
+
+            has_image = self._maybe_make_image(plan)
+
             self._emit(type="chapter_done", number=number, title=rec.title,
                        words=rec.word_count, text=rec.text,
-                       synopsis=rec.synopsis_line, flags=flags,
+                       synopsis=rec.synopsis_line, flags=flags, image=has_image,
                        fingerprint=rec.fingerprint, cost=self._cost_snapshot())
 
         manuscript = self.store.assemble_manuscript(self.graph)

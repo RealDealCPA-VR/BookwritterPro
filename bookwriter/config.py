@@ -115,6 +115,7 @@ class Settings:
     synopsis_line_chars: int = 240  # cap per-chapter rolling-synopsis line
     prev_tail_words: int = 120      # words of previous chapter fed for voice continuity
     run_continuity_check: bool = True
+    chapter_images: bool = False    # generate one inline illustration per chapter
 
     # Output sizing
     max_tokens_plan: int = 16000

@@ -18,7 +18,7 @@ import shutil
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..config import (
     Settings,
@@ -37,7 +37,6 @@ from ..kdp import (
 )
 from ..print_export import build_docx, print_spec as _print_spec, build_print_cover_svg
 from ..royalties import estimate_page_count, estimate_royalties
-from ..mock import MockLLM
 from ..pipeline import BookPipeline
 from ..store import BookStore
 from .broker import EventBroker
@@ -129,15 +128,33 @@ class BookService:
     # ------------------------------------------------------------------ #
     @staticmethod
     def has_api_key() -> bool:
-        return bool(os.environ.get("ANTHROPIC_API_KEY"))
+        # "Can a live (non-mock) run proceed?" — true for whichever provider is
+        # configured (Anthropic API key, OpenAI/OpenRouter key, or the claude CLI).
+        from ..provider import live_available
+        return live_available()
 
-    def _make_llm(self, mock: bool):
-        if mock:
-            return MockLLM()
-        # Imported lazily so the server boots even without the anthropic SDK.
-        from ..llm import AnthropicLLM
+    @staticmethod
+    def _no_creds_msg(provider: Optional[str] = None) -> str:
+        from ..provider import missing_credentials_message
+        return missing_credentials_message(provider)
 
-        return AnthropicLLM(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    @staticmethod
+    def _live(provider: Optional[str] = None) -> bool:
+        from ..provider import live_available
+        return live_available(provider)
+
+    def _make_llm(self, mock: bool, meta: Optional[Dict[str, Any]] = None):
+        # Lazily dispatch to the configured provider so the server boots even
+        # without any LLM SDK installed. A book's saved provider/model (from the
+        # create modal) overrides the server's env default.
+        from ..provider import make_llm
+
+        meta = meta or {}
+        return make_llm(
+            mock=mock,
+            provider=meta.get("provider") or None,
+            model=meta.get("model") or None,
+        )
 
     def _make_settings(self, meta: Dict[str, Any], book_id: str) -> Settings:
         profile = meta.get("profile", DEFAULT_PROFILE)
@@ -146,7 +163,22 @@ class BookService:
         s = Settings(project_dir=self._book_dir(book_id)).with_profile(profile)
         s.use_cache = bool(meta.get("use_cache", True))
         s.run_continuity_check = bool(meta.get("run_continuity_check", True))
+        s.chapter_images = bool(meta.get("chapter_images", False))
         return s
+
+    @staticmethod
+    def _make_image_provider(meta: Dict[str, Any]):
+        """An image backend for the write job, or None if this book didn't opt in
+        or no provider is configured (then chapters are written without images)."""
+        if not meta.get("chapter_images"):
+            return None
+        from ..images import image_available, make_image_provider
+        if not image_available():
+            return None
+        try:
+            return make_image_provider()
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------ #
     # Profiles
@@ -227,10 +259,10 @@ class BookService:
                 400,
                 f"Unknown profile {req.profile!r}; choose from {sorted(QUALITY_PROFILES)}.",
             )
-        if not req.mock and not self.has_api_key():
+        if not req.mock and not self._live(req.provider):
             raise ServiceError(
                 400,
-                "No ANTHROPIC_API_KEY set; enable demo mode (mock) or set a key.",
+                self._no_creds_msg(req.provider),
             )
 
         title_hint = req.title or req.premise
@@ -245,12 +277,15 @@ class BookService:
             "logline": "",
             "use_cache": bool(req.use_cache),
             "run_continuity_check": bool(req.run_continuity_check),
+            "provider": req.provider or "",
+            "model": req.model or "",
+            "chapter_images": bool(req.chapter_images),
         }
         self._write_meta(book_id, meta)
 
         try:
             settings = self._make_settings(meta, book_id)
-            llm = self._make_llm(req.mock)
+            llm = self._make_llm(req.mock, meta)
             pipe = BookPipeline(llm, settings)
             bible = pipe.plan(
                 premise=req.premise,
@@ -309,6 +344,7 @@ class BookService:
                 "act": p.act,
                 "written": written,
                 "word_count": word_count,
+                "has_image": store.has_image(p.number),
             })
         return {
             "book": self._summary(book_id, meta),
@@ -336,6 +372,7 @@ class BookService:
             raise ServiceError(404, f"Chapter {n} not in outline.")
         rec = self._load_chapter_record(store, n)
         written = rec is not None
+        has_image = store.has_image(n)
         return {
             "number": n,
             "title": (rec.get("title") if rec else None) or plan.title,
@@ -344,8 +381,22 @@ class BookService:
             "synopsis_line": (rec.get("synopsis_line") if rec else "") or "",
             "fingerprint": (rec.get("fingerprint") if rec else "") or "",
             "written": written,
+            "has_image": has_image,
+            "image_url": f"/api/books/{book_id}/chapters/{n}/image" if has_image else "",
             "plan": plan.to_dict(),
         }
+
+    def get_chapter_image(self, book_id: str, n: int) -> Tuple[str, str]:
+        """Return (filesystem path, media-type) for a chapter image, or 404."""
+        self._require_meta(book_id)
+        store = BookStore(self._book_dir(book_id))
+        path = store.find_image(n)
+        if not path:
+            raise ServiceError(404, f"Chapter {n} has no image.")
+        ext = path.rsplit(".", 1)[-1].lower()
+        media = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                 "webp": "image/webp", "gif": "image/gif"}.get(ext, "application/octet-stream")
+        return path, media
 
     def get_graph(self, book_id: str) -> Dict[str, Any]:
         self._require_meta(book_id)
@@ -393,7 +444,28 @@ class BookService:
         if graph is None:
             raise ServiceError(404, f"Book {book_id!r} has no plan.")
         markdown = store.assemble_manuscript(graph)
-        return {"markdown": markdown, "words": len(markdown.split())}
+        words = len(markdown.split())
+        # Augment (for the response only — not the saved .md) with an image marker
+        # after each chapter heading that has an illustration, so the reader and
+        # plain view can show it inline.
+        augmented = self._with_chapter_images(book_id, store, graph, markdown)
+        return {"markdown": augmented, "words": words}
+
+    @staticmethod
+    def _with_chapter_images(book_id: str, store: BookStore, graph, markdown: str) -> str:
+        import re
+        if not any(store.has_image(p.number) for p in graph.bible.outline):
+            return markdown
+        out = []
+        for line in markdown.split("\n"):
+            out.append(line)
+            m = re.match(r"^##\s+Chapter\s+(\d+)\b", line.strip())
+            if m:
+                n = int(m.group(1))
+                if store.has_image(n):
+                    out.append("")
+                    out.append(f"![Chapter {n} illustration](/api/books/{book_id}/chapters/{n}/image)")
+        return "\n".join(out)
 
     # ------------------------------------------------------------------ #
     # KDP packaging
@@ -417,19 +489,20 @@ class BookService:
         if not graph.chapters:
             raise ServiceError(404, f"Book {book_id!r} has no written chapters.")
 
-        # Pick the LLM: explicit req.mock wins; otherwise mock unless a key is set.
+        # Pick the LLM: explicit req.mock wins; otherwise mock unless creds exist.
+        prov = meta.get("provider") or None
         if req.mock is None:
-            mock = bool(meta.get("mock", False)) or not self.has_api_key()
+            mock = bool(meta.get("mock", False)) or not self._live(prov)
         else:
             mock = bool(req.mock)
-        if not mock and not self.has_api_key():
+        if not mock and not self._live(prov):
             raise ServiceError(
                 400,
-                "No ANTHROPIC_API_KEY set; enable demo mode (mock) or set a key.",
+                self._no_creds_msg(prov),
             )
 
         settings = self._make_settings(meta, book_id)
-        llm = self._make_llm(mock)
+        llm = self._make_llm(mock, meta)
         ledger = CostLedger()
 
         try:
@@ -470,7 +543,9 @@ class BookService:
             kdp_meta.contributors = contribs
 
         out_dir = self._kdp_dir(book_id)
-        result = build_kdp_kit(graph, kdp_meta, out_dir, cover_svg=req.cover_svg)
+        images = BookStore(self._book_dir(book_id)).collect_images(
+            [p.number for p in graph.bible.outline])
+        result = build_kdp_kit(graph, kdp_meta, out_dir, cover_svg=req.cover_svg, images=images)
 
         meta_dict = result["metadata"]
         # Persist a kdp.json snapshot in the book dir for later retrieval.
@@ -530,8 +605,10 @@ class BookService:
                 author_last="",
             )
         os.makedirs(out_dir, exist_ok=True)
+        store = BookStore(self._book_dir(book_id))
+        images = store.collect_images([p.number for p in graph.bible.outline])
         with open(epub, "wb") as f:
-            f.write(build_epub(graph, kdp_meta))
+            f.write(build_epub(graph, kdp_meta, images=images))
         return epub
 
     def epub_filename(self, book_id: str) -> str:
@@ -609,20 +686,21 @@ class BookService:
         if not graph.chapters:
             raise ServiceError(404, f"Book {book_id!r} has no written chapters.")
 
-        # Pick the LLM: explicit req.mock wins; else mock unless a key is set.
+        # Pick the LLM: explicit req.mock wins; else mock unless creds exist.
+        prov = meta.get("provider") or None
         if req.mock is None:
-            mock = bool(meta.get("mock", False)) or not self.has_api_key()
+            mock = bool(meta.get("mock", False)) or not self._live(prov)
         else:
             mock = bool(req.mock)
-        if not mock and not self.has_api_key():
+        if not mock and not self._live(prov):
             raise ServiceError(
                 400,
-                "No ANTHROPIC_API_KEY set; enable demo mode (mock) or set a key.",
+                self._no_creds_msg(prov),
             )
 
         kdp_meta = self._load_kdp_meta(book_id, meta, graph)
         settings = self._make_settings(meta, book_id)
-        llm = self._make_llm(mock)
+        llm = self._make_llm(mock, meta)
         ledger = CostLedger()
 
         try:
@@ -658,10 +736,10 @@ class BookService:
         store = BookStore(self._book_dir(book_id))
         if store.load_bible() is None:
             raise ServiceError(404, f"Book {book_id!r} has no plan.")
-        if not meta.get("mock", False) and not self.has_api_key():
+        if not meta.get("mock", False) and not self._live(meta.get("provider") or None):
             raise ServiceError(
                 400,
-                "No ANTHROPIC_API_KEY set; enable demo mode (mock) or set a key.",
+                self._no_creds_msg(meta.get("provider") or None),
             )
 
         # Reserve the running slot atomically; broker enforces one-job-per-book.
@@ -675,13 +753,14 @@ class BookService:
         def _run() -> None:
             try:
                 settings = self._make_settings(meta, book_id)
-                llm = self._make_llm(mock)
+                llm = self._make_llm(mock, meta)
 
                 def on_event(event: Dict[str, Any]) -> None:
                     self.broker.publish(book_id, event)
 
                 pipe = BookPipeline(
-                    llm, settings, on_event=on_event, stream_prose=True
+                    llm, settings, on_event=on_event, stream_prose=True,
+                    image_provider=self._make_image_provider(meta),
                 )
                 if not pipe.load():
                     raise RuntimeError("No plan found for this book.")

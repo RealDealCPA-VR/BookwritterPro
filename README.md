@@ -9,7 +9,7 @@
 A local‑first book‑generation studio with a beautiful editorial UI, an HTTP API, and a Model‑Context‑Protocol server — so a human *or an AI agent* can use it as a tool.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-72%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-112%20passing-2ea44f)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![MCP](https://img.shields.io/badge/MCP-17%20tools-7c3aed)
 ![KDP](https://img.shields.io/badge/Amazon%20KDP-fast%20publish-FF9900?logo=amazon&logoColor=white)
@@ -48,6 +48,8 @@ Most "AI writer" apps give you a chat box and a wall of text. BookwriterPro give
 - ✍️ **Watch your book get written, live.** Chapters stream in **token‑by‑token** with a "Writing…" pulse — like watching an author at the keyboard, with a running word + cost meter.
 - 📖 **Read it like a real book.** The finished manuscript opens into a **3D page‑turn reader** — two‑page spread, drop‑caps, page numbers, the works (with a plain‑scroll fallback).
 - 🕸️ **See the story's web.** A live character‑relationship graph: clean at rest, revealing each character's ties on hover.
+- 🔌 **Bring any model — or your *subscription*.** Pick the AI per book right in the setup modal: the Anthropic, OpenAI, or OpenRouter API — **or generate on your Claude / ChatGPT / Grok monthly subscription** with no API key and no per‑token billing.
+- 🎨 **Illustrated chapters.** Flip one toggle and every chapter gets its own art, generated from the story bible — **defaulting to Pixio**, or any image API you like. Images land inline in the reader *and* embed straight into the EPUB.
 - ⌨️ **⌘K everything.** A Linear/Raycast‑class command palette to jump anywhere.
 - 🌗 **Gorgeous in light *and* dark.** A true warm‑paper / espresso re‑theme, not a lazy invert. Fully responsive down to mobile.
 - 🤖 **An agent can drive the whole thing** — write *and* publish — via 17 MCP tools or a clean HTTP/OpenAPI API.
@@ -91,6 +93,46 @@ python -m bookwriter.serve
 ```
 
 …then toggle **Demo mode off** in the composer.
+
+---
+
+## 🔌 Bring your own model — or your subscription
+
+Every book is configured in a **Create AI Book** setup panel — chapters, length, style, audience, book type — and crucially, **which AI writes it**. Choose per book:
+
+| Backend | What it uses | How |
+|---|---|---|
+| **Anthropic** | Claude via the API | `ANTHROPIC_API_KEY` |
+| **OpenAI** | GPT via the API | `OPENAI_API_KEY` |
+| **OpenRouter** | one key, dozens of models | `OPENROUTER_API_KEY` |
+| **Claude subscription** | `claude -p` (Claude Code) | Pro/Max login — *no API key* |
+| **ChatGPT subscription** | `codex exec` (Codex CLI) | Plus/Pro login — *no API key* |
+| **Grok subscription** | a Grok CLI | X Premium / SuperGrok login |
+
+```bash
+# write on your Claude Pro/Max subscription instead of paying per token
+export BOOKWRITER_LLM_PROVIDER=claude-cli      # needs the `claude` CLI, logged in
+python -m bookwriter.serve
+```
+
+The subscription backends shell out to each vendor's signed‑in CLI, so generation rides your **flat monthly plan** — the live cost meter reads **$0/token** for those, and the prose stages honor the exact model you pick while the cheap continuity stages stay cheap.
+
+---
+
+## 🎨 Illustrated chapters
+
+Flip **Add chapter images** in the setup panel and BookwriterPro generates one illustration per chapter as it writes — prompted from the **story bible** (POV character's look, the scene's location, the chapter's mood), so the art stays on‑model with the book. Pictures appear inline in the **live reader** and the **3D page‑turn manuscript**, and embed straight into the exported **EPUB**.
+
+It **defaults to Pixio** (just set a key) and lets you swap in *any* image API:
+
+```bash
+export PIXIO_API_KEY=pxio_live_...             # the default — that's it
+# …or point at anything else:
+export BOOKWRITER_IMAGE_PROVIDER=openai        # OpenAI Images (uses OPENAI_API_KEY)
+export BOOKWRITER_IMAGE_PROVIDER=http          # ANY HTTP image API (set BOOKWRITER_IMAGE_URL …)
+```
+
+Image generation is **best‑effort**: if a key is missing or a call fails, the chapter is written without an image — never blocking your prose.
 
 ---
 
@@ -235,9 +277,14 @@ tests/           72 offline tests
 | What | How |
 |---|---|
 | Real generation | `ANTHROPIC_API_KEY` (else Demo/mock mode) |
+| LLM backend | `BOOKWRITER_LLM_PROVIDER` — `anthropic` (default) · `openai` · `openrouter` · `claude-cli` · `codex` · `grok-cli` |
+| Per‑tier models | `BOOKWRITER_MODEL_STRONG` / `_MID` / `_CHEAP` (for non‑Anthropic backends) |
+| Chapter images | `BOOKWRITER_IMAGE_PROVIDER` — `pixio` (default, `PIXIO_API_KEY`) · `openai` · `http` |
 | Where books live | `BOOKWRITER_DATA_DIR` (default `./.bookwriter_data`) |
 | Server host/port | `BOOKWRITER_HOST` / `BOOKWRITER_PORT` (default `127.0.0.1:8000`) |
 | Quality profile | `premium` · `balanced` (default) · `draft` — `bookwriter profiles` |
+
+> See [`.env.example`](.env.example) for every knob — provider keys, subscription‑CLI commands, and image‑provider settings.
 
 ---
 

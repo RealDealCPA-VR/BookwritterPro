@@ -26,6 +26,13 @@ class CreateBookRequest(BaseModel):
     mock: bool = False
     use_cache: bool = True
     run_continuity_check: bool = True
+    # Per-book LLM backend selection (None -> server default from env). `model` is
+    # an optional "Text model" applied to the prose stages for this book.
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    # Generate one inline illustration per chapter during the full-book write,
+    # using the configured image provider (default Pixio). Best-effort.
+    chapter_images: bool = False
 
 
 class WriteRequest(BaseModel):
@@ -143,6 +150,7 @@ class KdpMetadataResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     has_api_key: bool = False
+    provider: str = "anthropic"
 
 
 class WriteStartedResponse(BaseModel):

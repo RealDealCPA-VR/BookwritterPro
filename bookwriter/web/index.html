@@ -532,6 +532,157 @@
     </a>
   </template>
 
+  <!-- Create AI Book modal — the book-setup dialog (provider/model, chapter
+       length, style, audience, book type, toggles) with the live cover forge.
+       Built/opened by CreateModal in app.js; fields are prefixed `cm-`. -->
+  <template id="tpl-create">
+    <div class="create-overlay" role="dialog" aria-modal="true" aria-labelledby="cm-title-h">
+      <div class="create-panel" role="document">
+        <div class="create-head">
+          <h2 id="cm-title-h" class="serif">Create AI Book</h2>
+          <button type="button" class="help-close create-close" aria-label="Close">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+
+        <div class="create-body">
+          <form id="create-form" class="create-form" novalidate>
+            <div class="field field-title">
+              <label for="cm-title">Title <span class="opt">optional</span></label>
+              <input id="cm-title" name="title" type="text" placeholder="Optional. AI can fill this after the outline." />
+              <p class="field-hint">Leave blank to let BookwriterPro suggest one from the outline.</p>
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <label for="cm-chapters">Number of Chapters</label>
+                <input id="cm-chapters" name="chapters" type="number" min="1" max="60" value="5" />
+              </div>
+              <div class="field">
+                <label for="cm-length">Chapter Length</label>
+                <select id="cm-length" name="length">
+                  <option value="900">Brief — ~900 words</option>
+                  <option value="1500">Standard — ~1,500 words</option>
+                  <option value="2200" selected>Medium — detailed (~2,200)</option>
+                  <option value="3500">Long — in-depth (~3,500)</option>
+                  <option value="5000">Comprehensive — ~5,000</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="cm-topic">Topic <span class="opt">the book idea</span></label>
+              <textarea id="cm-topic" name="topic" rows="3"
+                placeholder="Describe the book idea, angle, audience needs, must-cover points, or anything the AI should know."></textarea>
+              <p class="field-hint">The seed the planner builds from. A sentence or two is plenty.</p>
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <label for="cm-style">Writing Style</label>
+                <select id="cm-style" name="style">
+                  <option selected>Informative</option>
+                  <option>Narrative</option>
+                  <option>Conversational</option>
+                  <option>Persuasive</option>
+                  <option>Academic</option>
+                  <option>Technical</option>
+                  <option>Inspirational</option>
+                  <option>Humorous</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="cm-audience">Audience</label>
+                <input id="cm-audience" name="audience" type="text" value="General readers" placeholder="Who is this for?" />
+              </div>
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <label for="cm-provider">AI Provider</label>
+                <select id="cm-provider" name="provider"></select>
+              </div>
+              <div class="field">
+                <label for="cm-booktype">Book Type</label>
+                <select id="cm-booktype" name="booktype">
+                  <option selected>Nonfiction</option>
+                  <option>Fiction</option>
+                  <option>Self-help</option>
+                  <option>Biography / Memoir</option>
+                  <option>Business</option>
+                  <option>Children's</option>
+                  <option>Textbook / Educational</option>
+                  <option>Poetry</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="cm-model" id="cm-model-label">Text Model</label>
+              <select id="cm-model" name="model"></select>
+            </div>
+
+            <div class="create-toggles">
+              <label class="toggle-card" for="cm-gen-cover">
+                <span class="toggle-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 3l2.2 5.5L20 9l-4 3.8 1 5.7L12 16l-5 2.5 1-5.7L4 9l5.8-.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+                <span class="toggle-text"><strong>Generate cover on creation</strong><span>Forge a durable ebook cover before opening the new book.</span></span>
+                <input type="checkbox" id="cm-gen-cover" checked />
+                <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+              </label>
+              <label class="toggle-card" for="cm-chapter-images">
+                <span class="toggle-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8.5" cy="10" r="1.6" fill="currentColor"/><path d="M5 17l4.5-4 3 2.5L16 12l3 3.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+                <span class="toggle-text"><strong>Add chapter images</strong><span>Generate one inline image per chapter from Visual Bible references.</span></span>
+                <input type="checkbox" id="cm-chapter-images" />
+                <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+              </label>
+              <label class="toggle-card" for="cm-text-graphics">
+                <span class="toggle-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 19V5m0 14h16M8 16V9m4 7V6m4 10v-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+                <span class="toggle-text"><strong>Include text graphics</strong><span>Allow charts, diagrams, and visual explainers in the chapters.</span></span>
+                <input type="checkbox" id="cm-text-graphics" />
+                <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+              </label>
+              <label class="toggle-card toggle-card-demo" for="cm-demo">
+                <span class="toggle-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20"><path d="M12 3a9 9 0 100 18 9 9 0 000-18zm0 4v5l3 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                <span class="toggle-text"><strong>Demo mode</strong><span>Generate offline with simulated prose — no API key or subscription needed.</span></span>
+                <input type="checkbox" id="cm-demo" />
+                <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+              </label>
+            </div>
+            <p class="field-hint" id="cm-img-note" hidden></p>
+          </form>
+
+          <aside class="create-forge" aria-label="Live cover preview">
+            <div class="forge-stage">
+              <div class="forge-book" id="cm-book">
+                <div class="forge-cover" id="cm-cover" data-cover aria-hidden="true"></div>
+                <div class="forge-empty" id="cm-empty">
+                  <div class="forge-empty-inner">
+                    <span class="forge-empty-glyph" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="30" height="30"><path d="M5 6c3-2 8-2 11 0 3-2 8-2 11 0v15c-3-2-8-2-11 0-3-2-8-2-11 0V6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><line x1="16" y1="6" x2="16" y2="21" stroke="currentColor" stroke-width="1.5"/></svg>
+                    </span>
+                    <p>Your cover takes shape<br>as you type.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p class="forge-caption">Live cover preview</p>
+          </aside>
+        </div>
+
+        <div class="create-foot">
+          <p class="create-step">Step 1 of 2 · Review the outline before generating the book</p>
+          <div class="create-foot-actions">
+            <p class="composer-note" id="cm-note"></p>
+            <button type="submit" form="create-form" class="btn btn-primary btn-lg" id="cm-submit">
+              <span class="btn-label">Generate Outline with AI</span>
+              <span class="btn-spinner" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+
   <!-- Toast region -->
   <div class="toast-region" id="toast-region" aria-live="assertive" aria-atomic="true"></div>
 

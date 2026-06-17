@@ -44,9 +44,58 @@ class BookStore:
     def chapter_md(self, n: int):
         return os.path.join(self.chapters_dir, f"{n:02d}.md")
 
+    @property
+    def images_dir(self):
+        return os.path.join(self.dir, "images")
+
+    def image_path(self, n: int, ext: str = "png"):
+        return os.path.join(self.images_dir, f"{n:02d}.{ext}")
+
     # ---- ensure dirs --------------------------------------------------
     def ensure(self):
         os.makedirs(self.chapters_dir, exist_ok=True)
+
+    # ---- chapter images ----------------------------------------------
+    _IMG_EXTS = ("png", "jpg", "jpeg", "webp", "gif")
+
+    def save_image(self, n: int, data: bytes, ext: str = "png") -> str:
+        os.makedirs(self.images_dir, exist_ok=True)
+        ext = (ext or "png").lower().lstrip(".")
+        if ext not in self._IMG_EXTS:
+            ext = "png"
+        # Remove any stale image for this chapter in another format first.
+        for e in self._IMG_EXTS:
+            p = self.image_path(n, e)
+            if e != ext and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+        path = self.image_path(n, ext)
+        with open(path, "wb") as f:
+            f.write(data)
+        return path
+
+    def find_image(self, n: int) -> Optional[str]:
+        for e in self._IMG_EXTS:
+            p = self.image_path(n, e)
+            if os.path.exists(p):
+                return p
+        return None
+
+    def has_image(self, n: int) -> bool:
+        return self.find_image(n) is not None
+
+    def collect_images(self, numbers) -> dict:
+        """{chapter_number: (bytes, ext)} for every chapter that has an image —
+        the shape build_epub() / build_kdp_kit() accept for embedding."""
+        out = {}
+        for n in numbers:
+            p = self.find_image(n)
+            if p:
+                with open(p, "rb") as f:
+                    out[n] = (f.read(), p.rsplit(".", 1)[-1].lower())
+        return out
 
     # ---- bible + state ------------------------------------------------
     def save_bible(self, bible: Bible):

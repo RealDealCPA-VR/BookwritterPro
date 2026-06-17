@@ -205,7 +205,7 @@ class _ServiceAdapter:
                 # PermissionError/ValueError the tools expect, else re-raise.
                 detail = getattr(e, "detail", str(e))
                 status = getattr(e, "status", None)
-                if status == 400 and "ANTHROPIC_API_KEY" in detail:
+                if status == 400 and "demo mode (mock)" in detail:
                     raise PermissionError(detail)
                 if status == 400:
                     raise ValueError(detail)
@@ -385,13 +385,9 @@ class _LocalBookService:
         return s
 
     def _make_llm(self, mock: bool) -> Any:
-        if mock:
-            from bookwriter.mock import MockLLM
+        from bookwriter.provider import make_llm
 
-            return MockLLM()
-        from bookwriter.llm import AnthropicLLM
-
-        return AnthropicLLM()
+        return make_llm(mock=mock)
 
     def _store(self, book_id: str) -> Any:
         from bookwriter.store import BookStore
@@ -457,10 +453,10 @@ class _LocalBookService:
                     run_continuity_check: bool = True) -> Dict[str, Any]:
         if not premise or not premise.strip():
             raise ValueError("premise is required")
-        if not mock and not (os.environ.get("ANTHROPIC_API_KEY")):
-            raise PermissionError(
-                "No ANTHROPIC_API_KEY set; enable demo mode (mock) or set a key."
-            )
+        if not mock:
+            from bookwriter.provider import live_available, missing_credentials_message
+            if not live_available():
+                raise PermissionError(missing_credentials_message())
         # id from the provided title, or a slug of the premise as a fallback.
         seed_title = title.strip() or premise.strip()[:48]
         book_id = make_book_id(

@@ -62,7 +62,7 @@ def _output_config(sm: StageModel, fmt: Optional[Dict[str, Any]] = None) -> Opti
 class AnthropicLLM:
     """Real client. Imports the SDK lazily so the package imports without it."""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model_override: Optional[str] = None):
         try:
             import anthropic  # noqa: F401
         except ImportError as e:  # pragma: no cover - environment dependent
@@ -71,15 +71,21 @@ class AnthropicLLM:
                 "Install it with: pip install anthropic"
             ) from e
         self._anthropic = anthropic
+        self.model_override = model_override
         self.client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+
+    def _model_for(self, stage: str, model: StageModel) -> str:
+        from .provider import resolve_model
+        return resolve_model(stage, self.model_override, model.model)
 
     # ------------------------------------------------------------------
     def complete_json(self, *, stage, model, system, user, schema, max_tokens,
                        ledger, cached=None, use_cache=True, cache_ttl="1h"):
         sys_blocks = _build_system(system, cached, use_cache, cache_ttl)
         out_cfg = _output_config(model, fmt={"type": "json_schema", "schema": schema})
+        mdl = self._model_for(stage, model)
         params: Dict[str, Any] = {
-            "model": model.model,
+            "model": mdl,
             "max_tokens": max_tokens,
             "system": sys_blocks,
             "messages": [{"role": "user", "content": user}],
@@ -87,7 +93,7 @@ class AnthropicLLM:
             "output_config": out_cfg,
         }
         resp = self.client.messages.create(**params)
-        self._record(ledger, stage, model.model, resp, cache_ttl)
+        self._record(ledger, stage, mdl, resp, cache_ttl)
         text = next((b.text for b in resp.content if getattr(b, "type", "") == "text"), "")
         return json.loads(text) if text else {}
 
@@ -96,8 +102,9 @@ class AnthropicLLM:
                       ledger, cached=None, use_cache=True, cache_ttl="1h", on_delta=None):
         sys_blocks = _build_system(system, cached, use_cache, cache_ttl)
         out_cfg = _output_config(model)
+        mdl = self._model_for(stage, model)
         kwargs: Dict[str, Any] = {
-            "model": model.model,
+            "model": mdl,
             "max_tokens": max_tokens,
             "system": sys_blocks,
             "messages": [{"role": "user", "content": user}],
@@ -112,7 +119,7 @@ class AnthropicLLM:
                 for chunk in stream.text_stream:
                     on_delta(chunk)
             final = stream.get_final_message()
-        self._record(ledger, stage, model.model, final, cache_ttl)
+        self._record(ledger, stage, mdl, final, cache_ttl)
         return "".join(b.text for b in final.content if getattr(b, "type", "") == "text")
 
     # ------------------------------------------------------------------

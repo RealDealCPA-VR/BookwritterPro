@@ -1928,6 +1928,105 @@ body.cmdk-lock { overflow: hidden; }
 .help-foot { margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--line);
   font-size: var(--t-xs); color: var(--ink-faint); }
 
+/* ---- Chapter illustration (reader) ---- */
+.chapter-image {
+  margin: 0 0 var(--s-5); border-radius: var(--radius);
+  overflow: hidden; border: 1px solid var(--line);
+  background: var(--surface-2); box-shadow: var(--shadow-sm);
+}
+.chapter-image img { display: block; width: 100%; height: auto; }
+
+/* Manuscript reader illustration — a fixed aspect-ratio box so the paginator
+   measures a stable height before the image finishes loading (no reflow/clip). */
+.ms-figure {
+  margin: 0 auto var(--s-4); width: 100%; aspect-ratio: 3 / 2;
+  border-radius: var(--radius-sm); overflow: hidden;
+  border: 1px solid var(--line); background: var(--surface-2);
+}
+.ms-figure img { display: block; width: 100%; height: 100%; object-fit: cover; }
+#manuscript-plain .ms-figure { max-width: 560px; }
+
+/* ---- Create AI Book modal ---- */
+.create-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  display: grid; align-items: start; justify-items: center;
+  padding: clamp(var(--s-4), 6vh, 10vh) var(--s-4) var(--s-5);
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
+  backdrop-filter: blur(3px) saturate(1.1);
+  opacity: 0; transition: opacity var(--dur) var(--ease);
+}
+.create-overlay.is-open { opacity: 1; }
+.create-overlay.is-closing { opacity: 0; }
+.create-panel {
+  width: min(940px, 100%); max-height: min(90vh, 880px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line-strong); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-12px) scale(.985); opacity: .6;
+  transition: transform var(--dur) var(--ease-spring), opacity var(--dur) var(--ease);
+}
+.create-overlay.is-open .create-panel { transform: none; opacity: 1; }
+.create-overlay.is-closing .create-panel { transform: translateY(-8px) scale(.99); opacity: 0; }
+
+.create-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--s-5) var(--s-6); border-bottom: 1px solid var(--line);
+  background: var(--paper-2); flex: 0 0 auto;
+}
+.create-head h2 { font-size: var(--t-2xl); }
+.create-close { position: static; }
+
+.create-body {
+  flex: 1 1 auto; overflow-y: auto;
+  display: grid; grid-template-columns: 1fr 232px; gap: var(--s-6);
+  padding: var(--s-6);
+}
+.create-form { display: grid; gap: var(--s-4); align-content: start; }
+.create-forge { position: sticky; top: 0; display: grid; gap: var(--s-3); justify-items: center; align-content: start; }
+.create-forge .forge-stage { width: 100%; max-width: 200px; perspective: 1200px; }
+
+.create-toggles { display: grid; gap: var(--s-3); margin-top: var(--s-2); }
+.toggle-card {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: var(--s-3);
+  padding: var(--s-3) var(--s-4); border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface-2); cursor: pointer;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.toggle-card:hover { border-color: var(--line-strong); }
+.toggle-card input { position: absolute; opacity: 0; width: 0; height: 0; }
+.toggle-card .switch-track { flex: 0 0 auto; width: 46px; height: 26px; border-radius: 999px;
+  background: var(--line-strong); position: relative; transition: background var(--dur) var(--ease); }
+.toggle-card .switch-thumb { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px;
+  border-radius: 50%; background: var(--switch-off); box-shadow: var(--shadow-sm);
+  transition: transform var(--dur) var(--ease), background var(--dur) var(--ease); }
+.toggle-card input:checked + .switch-track { background: var(--accent); }
+.toggle-card input:checked + .switch-track .switch-thumb { transform: translateX(20px); background: var(--accent-ink); }
+.toggle-card input:focus-visible + .switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
+.toggle-card:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); }
+.toggle-ic { display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink-soft); border: 1px solid var(--line); }
+.toggle-card:has(input:checked) .toggle-ic { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+.toggle-text { min-width: 0; display: grid; gap: 2px; }
+.toggle-text strong { font-size: var(--t-sm); }
+.toggle-text span { font-size: var(--t-xs); color: var(--ink-faint); }
+
+.create-foot {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: var(--s-4);
+  padding: var(--s-4) var(--s-6); border-top: 1px solid var(--line); background: var(--paper-2);
+}
+.create-step { font-size: var(--t-xs); color: var(--ink-faint); }
+.create-foot-actions { display: flex; align-items: center; gap: var(--s-4); }
+.create-foot-actions .composer-note { max-width: 34ch; text-align: right; }
+
+@media (max-width: 760px) {
+  .create-body { grid-template-columns: 1fr; }
+  .create-forge { order: -1; max-width: 180px; justify-self: center; }
+  .create-foot { flex-direction: column; align-items: stretch; }
+  .create-foot-actions { flex-direction: column-reverse; align-items: stretch; }
+  .create-foot-actions .composer-note { text-align: left; }
+}
+
 /* ---- View Transitions: refined cross-fade + slight slide via --ease ---- */
 @media (prefers-reduced-motion: no-preference) {
   ::view-transition-old(root),
@@ -1947,8 +2046,8 @@ body.cmdk-lock { overflow: hidden; }
 /* Reduced-motion: overlays appear/disappear instantly, no panel spring, and
    no view-transition pseudo animations. */
 @media (prefers-reduced-motion: reduce) {
-  .cmdk-overlay, .help-overlay,
-  .cmdk-panel, .help-panel { transition: none !important; }
-  .cmdk-panel, .help-panel { transform: none !important; opacity: 1 !important; }
+  .cmdk-overlay, .help-overlay, .create-overlay,
+  .cmdk-panel, .help-panel, .create-panel { transition: none !important; }
+  .cmdk-panel, .help-panel, .create-panel { transform: none !important; opacity: 1 !important; }
   ::view-transition-old(root), ::view-transition-new(root) { animation: none !important; }
 }

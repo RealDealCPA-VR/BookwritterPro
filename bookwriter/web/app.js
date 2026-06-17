@@ -27,6 +27,7 @@ const API = {
   },
   health: () => API._json("GET", "/health"),
   profiles: () => API._json("GET", "/profiles"),
+  providers: () => API._json("GET", "/providers"),
   books: () => API._json("GET", "/books"),
   book: (id) => API._json("GET", `/books/${id}`),
   createBook: (payload) => API._json("POST", "/books", payload),
@@ -188,7 +189,16 @@ async function refreshHealth() {
   try {
     const h = await API.health();
     State.hasApiKey = !!h.has_api_key;
-    if (h.has_api_key) { pill.className = "api-pill is-live"; text.textContent = "API key live"; }
+    const labels = {
+      anthropic: "Anthropic API live",
+      openai: "OpenAI live",
+      openrouter: "OpenRouter live",
+      "claude-cli": "Claude CLI (subscription)",
+      codex: "Codex CLI (ChatGPT sub)",
+      "grok-cli": "Grok CLI (subscription)",
+      cli: "Custom CLI",
+    };
+    if (h.has_api_key) { pill.className = "api-pill is-live"; text.textContent = labels[h.provider] || "Live"; }
     else { pill.className = "api-pill is-demo"; text.textContent = "Demo mode only"; }
   } catch {
     pill.className = "api-pill"; text.textContent = "Server offline";
@@ -214,7 +224,12 @@ const Router = {
     const raw = location.hash.replace(/^#/, "") || "/";
     const parts = raw.split("/").filter(Boolean); // e.g. ["b","id","graph"]
     if (parts.length === 0) return Views.library();
-    if (parts[0] === "new") { setActiveNav("new"); return Views.composer(); }
+    if (parts[0] === "new") {
+      // "New book" is a modal, not a page. Land on the library and pop it open.
+      const p = Views.library();
+      Promise.resolve(p).then(() => CreateModal.open());
+      return p;
+    }
     if (parts[0] === "b" && parts[1]) {
       const id = parts[1];
       if (parts[2] === "graph") return Views.graph(id);
@@ -624,6 +639,258 @@ async function onComposerSubmit(e, view) {
   }
 }
 
+/* ===================== CREATE AI BOOK (modal) ========================= */
+// The book-setup dialog. Replaces the full-page composer as the "New book"
+// entry point: provider/model pickers (wired per-book to the backend provider
+// system), chapter length, writing style, audience, book type, and toggles —
+// with the live cover forge beside it. "Generate Outline" plans the book
+// (Step 1), then drops into the studio to review + write (Step 2).
+const reduceMotion = () => window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const CreateModal = {
+  el: null, lastFocused: null, catalog: null, demoUserSet: false,
+
+  async open() {
+    if (CreateModal.el) return;
+    CreateModal.lastFocused = document.activeElement;
+    CreateModal.demoUserSet = false;
+    const node = tpl("tpl-create");
+    document.body.appendChild(node);
+    document.body.classList.add("cmdk-lock");
+    CreateModal.el = node;
+
+    node.addEventListener("mousedown", (e) => { if (e.target === node) CreateModal.close(); });
+    node.querySelector(".create-close").addEventListener("click", () => CreateModal.close());
+    node.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); CreateModal.close(); }
+    });
+
+    await CreateModal.populateProviders(node);
+
+    const demo = node.querySelector("#cm-demo");
+    if (!State.hasApiKey) demo.checked = true;
+    demo.addEventListener("change", () => { CreateModal.demoUserSet = true; CreateModal.refreshNote(node); });
+
+    // Chapter-images availability hint (image backend is configured server-side).
+    const imgToggle = node.querySelector("#cm-chapter-images");
+    imgToggle.addEventListener("change", () => CreateModal.refreshImageNote(node));
+    CreateModal.refreshImageNote(node);
+
+    const seed = "cm-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+    bindForge(node, seed);
+
+    node.querySelector("#create-form").addEventListener("submit", (e) => CreateModal.submit(e, node));
+
+    if (!reduceMotion()) requestAnimationFrame(() => node.classList.add("is-open"));
+    else node.classList.add("is-open");
+    setTimeout(() => { const f = node.querySelector("#cm-topic"); if (f) f.focus(); }, 60);
+  },
+
+  close() {
+    const node = CreateModal.el;
+    if (!node) return;
+    CreateModal.el = null;
+    if (!document.querySelector(".cmdk-overlay, .help-overlay")) document.body.classList.remove("cmdk-lock");
+    const finish = () => node.remove();
+    if (reduceMotion()) finish();
+    else {
+      node.classList.remove("is-open"); node.classList.add("is-closing");
+      let done = false;
+      const end = () => { if (done) return; done = true; finish(); };
+      node.addEventListener("transitionend", end, { once: true });
+      setTimeout(end, 280);
+    }
+    const prev = CreateModal.lastFocused; CreateModal.lastFocused = null;
+    if (prev && typeof prev.focus === "function" && document.contains(prev)) { try { prev.focus(); } catch {} }
+    // If we arrived via the #/new deep-link, return to the library cleanly.
+    if (location.hash === "#/new") Router.go("#/");
+  },
+
+  async populateProviders(node) {
+    if (!CreateModal.catalog) {
+      try { CreateModal.catalog = await API.providers(); }
+      catch { CreateModal.catalog = { providers: [], current: "anthropic" }; }
+    }
+    const cat = CreateModal.catalog;
+    const sel = node.querySelector("#cm-provider");
+    sel.innerHTML = "";
+    (cat.providers || []).forEach((p) => {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = p.label + (p.available ? "" : " — not configured");
+      sel.appendChild(o);
+    });
+    const avail = (cat.providers || []).filter((p) => p.available);
+    let def = cat.current;
+    if (!avail.find((p) => p.id === cat.current) && avail.length) def = avail[0].id;
+    if (def) sel.value = def;
+    CreateModal.populateModels(node);
+    sel.addEventListener("change", () => { CreateModal.populateModels(node); CreateModal.refreshNote(node); });
+    CreateModal.refreshNote(node);
+  },
+
+  populateModels(node) {
+    const cat = CreateModal.catalog || { providers: [] };
+    const pid = node.querySelector("#cm-provider").value;
+    const prov = (cat.providers || []).find((p) => p.id === pid);
+    const msel = node.querySelector("#cm-model");
+    const label = node.querySelector("#cm-model-label");
+    const models = (prov && prov.models) || [];
+    msel.innerHTML = "";
+    if (!models.length) {
+      const o = document.createElement("option"); o.value = ""; o.textContent = "Default"; msel.appendChild(o);
+    } else {
+      models.forEach((m) => { const o = document.createElement("option"); o.value = m.id; o.textContent = m.label; msel.appendChild(o); });
+    }
+    // A subscription CLI's single "" model ("default") isn't a real choice.
+    const trivial = models.length <= 1 && (!models[0] || models[0].id === "");
+    msel.disabled = trivial;
+    label.textContent = (prov ? prov.label + " " : "") + "Text Model";
+  },
+
+  refreshNote(node) {
+    const cat = CreateModal.catalog || { providers: [] };
+    const pid = node.querySelector("#cm-provider").value;
+    const prov = (cat.providers || []).find((p) => p.id === pid);
+    const demo = node.querySelector("#cm-demo");
+    const note = node.querySelector("#cm-note");
+    note.classList.remove("is-error");
+    if (prov && !prov.available) {
+      if (!CreateModal.demoUserSet) demo.checked = true;
+      note.textContent = demo.checked
+        ? `${prov.label} isn’t configured — Demo mode is on so you can still try the flow.`
+        : `${prov.label} isn’t configured on the server; a live run will be rejected.`;
+    } else {
+      note.textContent = "";
+    }
+  },
+
+  refreshImageNote(node) {
+    const el = node.querySelector("#cm-img-note");
+    if (!el) return;
+    const on = node.querySelector("#cm-chapter-images").checked;
+    const img = (CreateModal.catalog && CreateModal.catalog.image) || null;
+    if (on && img && !img.available) {
+      el.hidden = false;
+      el.classList.add("is-error");
+      el.textContent = `Chapter images need an image provider — set PIXIO_API_KEY (default) or BOOKWRITER_IMAGE_PROVIDER. Chapters will be written without images until then.`;
+    } else if (on && img && img.available) {
+      el.hidden = false; el.classList.remove("is-error");
+      el.textContent = `Images via ${img.provider}. One illustration per chapter is generated as the book is written.`;
+    } else {
+      el.hidden = true; el.textContent = "";
+    }
+  },
+
+  async submit(e, node) {
+    e.preventDefault();
+    const note = node.querySelector("#cm-note");
+    note.textContent = ""; note.classList.remove("is-error");
+    const val = (s) => (node.querySelector(s).value || "").trim();
+
+    const title = val("#cm-title");
+    const topic = val("#cm-topic");
+    const premise = topic || title;
+    if (!premise) {
+      note.textContent = "Add a topic (or at least a title) so the planner has a seed.";
+      note.classList.add("is-error");
+      node.querySelector("#cm-topic").focus();
+      return;
+    }
+
+    const style = val("#cm-style"), audience = val("#cm-audience"), bookType = val("#cm-booktype");
+    const textGraphics = node.querySelector("#cm-text-graphics").checked;
+    const guidance = [
+      style ? `Writing style: ${style}.` : "",
+      audience ? `Intended audience: ${audience}.` : "",
+      bookType ? `Book type: ${bookType}.` : "",
+      textGraphics
+        ? "You may include charts, diagrams, tables, and visual explainers where they genuinely help."
+        : "Do not include charts, diagrams, tables, or visual explainers — write prose only.",
+    ].filter(Boolean).join(" ");
+
+    const chapters = node.querySelector("#cm-chapters").value;
+    const payload = {
+      premise,
+      title: title || undefined,
+      genre: bookType || undefined,
+      guidance,
+      chapters: chapters ? Number(chapters) : undefined,
+      words_per_chapter: Number(node.querySelector("#cm-length").value) || 2000,
+      profile: "balanced",
+      mock: node.querySelector("#cm-demo").checked,
+      use_cache: true,
+      run_continuity_check: true,
+      provider: node.querySelector("#cm-provider").value || undefined,
+      model: node.querySelector("#cm-model").value || undefined,
+      chapter_images: node.querySelector("#cm-chapter-images").checked,
+    };
+
+    const btn = node.querySelector("#cm-submit");
+    btn.classList.add("is-busy"); btn.disabled = true;
+    $(".btn-label", btn).textContent = "Generating outline…";
+    try {
+      const res = await API.createBook(payload);
+      const bookEl = node.querySelector("#cm-book");
+      if (bookEl && !reduceMotion() && node.querySelector("#cm-gen-cover").checked) {
+        bookEl.classList.add("is-binding");
+        if (typeof flourish === "function") flourish(bookEl);
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      toast("Your story bible is ready.", { title: res.book.title || "Outline ready", type: "good" });
+      CreateModal.close();
+      Router.go(`#/b/${res.book.id}`);
+    } catch (err) {
+      note.textContent = err.message || "Could not generate the outline.";
+      note.classList.add("is-error");
+      toast(err.message || "Generation failed.", { title: "Could not create book", type: "error" });
+    } finally {
+      btn.classList.remove("is-busy"); btn.disabled = false;
+      $(".btn-label", btn).textContent = "Generate Outline with AI";
+    }
+  },
+};
+window.CreateModal = CreateModal;
+
+/* Live cover forge for the modal — the jacket designs itself from the title /
+   topic / book-type, mirroring the composer's forge (reduced-motion-safe). */
+function bindForge(node, seed) {
+  const coverEl = node.querySelector("#cm-cover");
+  const bookEl = node.querySelector("#cm-book");
+  const emptyEl = node.querySelector("#cm-empty");
+  const titleEl = node.querySelector("#cm-title");
+  const topicEl = node.querySelector("#cm-topic");
+  const typeEl = node.querySelector("#cm-booktype");
+  if (!coverEl || !window.Covers || typeof window.Covers.svg !== "function") return;
+
+  const workingTitle = () => {
+    const t = (titleEl.value || "").trim();
+    if (t) return t;
+    const p = (topicEl.value || "").trim();
+    if (p) {
+      const words = p.replace(/[.,;:!?"'—–-].*$/, "").split(/\s+/).filter(Boolean).slice(0, 5);
+      if (words.length) return words.join(" ");
+    }
+    return "";
+  };
+  const render = () => {
+    const title = workingTitle();
+    const genre = (typeEl.value || "").trim();
+    const hasInput = !!(title || genre);
+    if (emptyEl) emptyEl.hidden = hasInput;
+    coverEl.hidden = !hasInput;
+    if (!hasInput) { coverEl.innerHTML = ""; return; }
+    try { coverEl.innerHTML = window.Covers.svg({ id: seed, title: title || "Untitled", genre }, { seed }); }
+    catch { return; }
+    if (!reduceMotion()) { bookEl.classList.remove("is-stamp"); void bookEl.offsetWidth; bookEl.classList.add("is-stamp"); }
+  };
+  let t = 0;
+  const onInput = () => { clearTimeout(t); t = setTimeout(render, 120); };
+  [titleEl, topicEl, typeEl].forEach((el) => el && el.addEventListener("input", onInput));
+  typeEl && typeEl.addEventListener("change", render);
+  render();
+}
+
 /* ============================== STUDIO ================================= */
 const Studio = {
   id: null,
@@ -750,10 +1017,13 @@ Studio.showPlaceholder = function () {
   $("#reader-flags").hidden = true;
 };
 
-Studio.renderProse = function (text) {
+Studio.renderProse = function (text, imageUrl) {
   const body = $("#reader-body");
   const paras = String(text || "").split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-  body.innerHTML = paras.map((p) => `<p>${esc(p)}</p>`).join("") || "<p></p>";
+  const fig = imageUrl
+    ? `<figure class="chapter-image"><img src="${esc(imageUrl)}" alt="Chapter illustration" loading="lazy" onerror="this.closest('figure').remove()"></figure>`
+    : "";
+  body.innerHTML = fig + (paras.map((p) => `<p>${esc(p)}</p>`).join("") || "<p></p>");
   // Reset the incremental-stream cursor (used by appendDelta).
   Studio._streamRendered = "";
 };
@@ -864,7 +1134,7 @@ Studio.openChapter = async function (num) {
   try {
     const ch = await API.chapter(Studio.id, num);
     Studio.renderHeaderForChapter(num, { act: (ch.plan && ch.plan.act) || meta.act, title: ch.title, word_count: ch.word_count });
-    Studio.renderProse(ch.text);
+    Studio.renderProse(ch.text, ch.image_url);
   } catch (err) {
     body.innerHTML = `<p class="rail-empty">Couldn't load chapter: ${esc(err.message)}</p>`;
   }
@@ -1101,7 +1371,7 @@ Studio.handleEvent = function (msg) {
         // (renderProse rebuilds innerHTML, but remove explicitly for clarity).
         Studio.removeStreamSkeleton();
         // Full, clean render now that the chapter is final (drop-cap re-enabled).
-        Studio.renderProse(msg.text);
+        Studio.renderProse(msg.text, msg.image ? `/api/books/${Studio.id}/chapters/${n}/image` : "");
         const rwDone = $("#reader-words");
         rwDone.classList.remove("is-writing");
         rwDone.textContent = `${fmtInt(msg.words || 0)} words`;
@@ -1835,6 +2105,8 @@ function parseManuscript(md) {
     if (/^#\s+/.test(t)) { flush(); tokens.push({ kind: "h1", text: t.replace(/^#\s+/, "") }); continue; }
     if (/^##\s+/.test(t)) { flush(); tokens.push({ kind: "h2", text: t.replace(/^##\s+/, "") }); firstAfterHeading = true; continue; }
     if (/^#{3,}\s+/.test(t)) { flush(); tokens.push({ kind: "h3", text: t.replace(/^#{3,}\s+/, "") }); firstAfterHeading = true; continue; }
+    const im = t.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (im) { flush(); tokens.push({ kind: "img", alt: im[1], url: im[2] }); firstAfterHeading = true; continue; }
     if (/^([-*_])\1{2,}$/.test(t) || t === "***" || t === "---") { flush(); tokens.push({ kind: "hr" }); continue; }
     para.push(t);
   }
@@ -1849,6 +2121,7 @@ function tokenHtml(tok) {
     case "h2": return `<h2>${esc(tok.text)}</h2><p class="chapter-ornament" aria-hidden="true">❧</p>`;
     case "h3": return `<h3>${esc(tok.text)}</h3>`;
     case "hr": return "<hr/>";
+    case "img": return `<figure class="ms-figure"><img src="${esc(tok.url)}" alt="${esc(tok.alt || "Chapter illustration")}" loading="lazy" onerror="this.closest('figure').remove()"></figure>`;
     case "p": return `<p${tok.dropcap ? ' class="first-para"' : ""}>${esc(tok.text)}</p>`;
     default: return "";
   }
@@ -1998,6 +2271,8 @@ function renderMarkdown(md) {
     if (/^#\s+/.test(t)) { flush(); out.push(`<h1>${esc(t.replace(/^#\s+/, ""))}</h1>`); continue; }
     if (/^##\s+/.test(t)) { flush(); out.push(`<h2>${esc(t.replace(/^##\s+/, ""))}</h2>`); out.push('<p class="chapter-ornament" aria-hidden="true">❧</p>'); firstAfterHeading = true; continue; }
     if (/^#{3,}\s+/.test(t)) { flush(); out.push(`<h3>${esc(t.replace(/^#{3,}\s+/, ""))}</h3>`); firstAfterHeading = true; continue; }
+    const im = t.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+    if (im) { flush(); out.push(`<figure class="ms-figure"><img src="${esc(im[2])}" alt="${esc(im[1] || "Chapter illustration")}" loading="lazy" onerror="this.closest('figure').remove()"></figure>`); firstAfterHeading = true; continue; }
     if (/^([-*_])\1{2,}$/.test(t) || t === "***" || t === "---") { flush(); out.push("<hr/>"); continue; }
     para.push(t);
   }
@@ -2015,6 +2290,15 @@ function boot() {
   initTheme();
   refreshHealth();
   ensureProfiles();
+  // "New book" links open the Create-AI-Book modal in place rather than
+  // navigating to a page — without changing the hash (deep-linking #/new still
+  // works via the router branch above).
+  document.addEventListener("click", (e) => {
+    const trigger = e.target.closest && e.target.closest('a[href="#/new"], [data-action="new-book"]');
+    if (!trigger) return;
+    e.preventDefault();
+    CreateModal.open();
+  });
   Router.start();
 }
 

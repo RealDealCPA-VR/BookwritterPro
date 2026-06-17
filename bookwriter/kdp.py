@@ -553,7 +553,12 @@ _CSS = (
 )
 
 
-def build_epub(graph, meta: "KdpMetadata", *, cover_svg: Optional[str] = None) -> bytes:
+_IMG_MEDIA = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+              "webp": "image/webp", "gif": "image/gif"}
+
+
+def build_epub(graph, meta: "KdpMetadata", *, cover_svg: Optional[str] = None,
+               images: Optional[Dict[int, "tuple"]] = None) -> bytes:
     """Build a valid EPUB 3 (returned as zip bytes). Stdlib only.
 
     Layout:
@@ -576,6 +581,8 @@ def build_epub(graph, meta: "KdpMetadata", *, cover_svg: Optional[str] = None) -
     book_id = _book_id(graph, meta)
 
     chapters = [graph.chapters[n] for n in sorted(graph.chapters)]
+    images = images or {}
+    image_assets: List[Dict[str, Any]] = []  # {file, data, media, id}
 
     # --- chapter XHTML ------------------------------------------------------
     chapter_files: List[Dict[str, str]] = []
@@ -585,9 +592,23 @@ def build_epub(graph, meta: "KdpMetadata", *, cover_svg: Optional[str] = None) -
         for j, p in enumerate(paras):
             cls = ' class="first"' if j == 0 else ""
             p_html.append(f'<p{cls}>{_esc(p)}</p>')
+        # Optional chapter illustration, embedded right under the title.
+        img_html = ""
+        if rec.number in images:
+            data, ext = images[rec.number]
+            ext = (ext or "png").lower().lstrip(".")
+            if ext not in _IMG_MEDIA:
+                ext = "png"
+            iname = f"img-{rec.number:02d}.{ext}"
+            image_assets.append({"file": iname, "data": data,
+                                 "media": _IMG_MEDIA[ext], "id": f"img{rec.number:02d}"})
+            img_html = (
+                f'<figure class="chapter-illus" style="margin:1em 0;text-align:center">'
+                f'<img src="{iname}" alt="" style="max-width:100%;height:auto"/></figure>\n'
+            )
         body = (
             f'<section epub:type="chapter">\n'
-            f'<h2>{_esc(rec.title)}</h2>\n' + "\n".join(p_html) + "\n</section>"
+            f'<h2>{_esc(rec.title)}</h2>\n' + img_html + "\n".join(p_html) + "\n</section>"
         )
         fname = f"chap-{i:02d}.xhtml"
         chapter_files.append({
@@ -679,6 +700,10 @@ def build_epub(graph, meta: "KdpMetadata", *, cover_svg: Optional[str] = None) -
             f'    <item id="{cf["id"]}" href="{cf["file"]}" '
             f'media-type="application/xhtml+xml"/>'
         )
+    for ia in image_assets:
+        manifest_items.append(
+            f'    <item id="{ia["id"]}" href="{ia["file"]}" media-type="{ia["media"]}"/>'
+        )
 
     spine_items = ['    <itemref idref="cover"/>', '    <itemref idref="title"/>']
     spine_items += [f'    <itemref idref="{cf["id"]}"/>' for cf in chapter_files]
@@ -733,6 +758,8 @@ def build_epub(graph, meta: "KdpMetadata", *, cover_svg: Optional[str] = None) -
         add("OEBPS/title.xhtml", title_xhtml)
         for cf in chapter_files:
             add(f"OEBPS/{cf['file']}", cf["xhtml"])
+        for ia in image_assets:
+            zf.writestr(f"OEBPS/{ia['file']}", ia["data"], zipfile.ZIP_DEFLATED)
 
     return buf.getvalue()
 
@@ -858,7 +885,8 @@ Files in this kit:
 def build_kdp_kit(graph, meta: "KdpMetadata", out_dir: str, *,
                   cover_svg: Optional[str] = None,
                   trim=(6.0, 9.0), paper: str = "white",
-                  marketing: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                  marketing: Optional[Dict[str, Any]] = None,
+                  images: Optional[Dict[int, "tuple"]] = None) -> Dict[str, Any]:
     """Write the full KDP kit to ``out_dir`` and return the paths + metadata.
 
     Produces the ebook kit (metadata.json, manuscript.epub, cover.svg,
@@ -894,7 +922,7 @@ def build_kdp_kit(graph, meta: "KdpMetadata", out_dir: str, *,
     with open(paths["metadata"], "w", encoding="utf-8") as f:
         json.dump(meta_dict, f, indent=2, ensure_ascii=False)
     with open(paths["epub"], "wb") as f:
-        f.write(build_epub(graph, meta, cover_svg=cover))
+        f.write(build_epub(graph, meta, cover_svg=cover, images=images))
     with open(paths["cover"], "w", encoding="utf-8") as f:
         f.write(cover)
     with open(paths["listing"], "w", encoding="utf-8") as f:

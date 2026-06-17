@@ -19,16 +19,13 @@ from typing import List, Optional
 
 from .config import Settings, QUALITY_PROFILES, MODEL_PRICES
 from .llm import LLM
-from .mock import MockLLM
 from .pipeline import BookPipeline
 from .store import BookStore
 
 
 def _make_llm(args) -> LLM:
-    if args.mock:
-        return MockLLM()
-    from .llm import AnthropicLLM
-    return AnthropicLLM(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    from .provider import make_llm
+    return make_llm(mock=args.mock)
 
 
 def _make_settings(args) -> Settings:
