@@ -9,7 +9,7 @@ in the web app, and vice versa.
 
 ## What it does
 
-The server exposes ten tools. Every tool returns plain JSON. Use `mock=True`
+The server exposes seventeen tools. Every tool returns plain JSON. Use `mock=True`
 to run **fully offline with no API key** (deterministic placeholder prose) —
 ideal for trying the tools before spending tokens.
 
@@ -25,6 +25,13 @@ ideal for trying the tools before spending tokens.
 | `get_graph(book_id)` | The continuity graph: characters, locations, items, threads, timeline, rolling synopsis. |
 | `get_cost(book_id)` | Token-cost snapshot + human-readable report for the last write run. |
 | `get_manuscript(book_id)` | The assembled full book as Markdown. |
+| `prepare_kdp(book_id, author_first, author_last, ...)` | Generate KDP listing metadata + build the upload kit (EPUB, cover, listing, checklist) into `<book>/kdp/`. |
+| `export_epub(book_id)` | Path to the KDP-ready EPUB (builds the kit if needed). |
+| `export_docx(book_id)` | Path to the print-ready 6×9 DOCX interior. |
+| `print_spec(book_id, paper="white")` | Paperback print spec: estimated page count, spine width, full-wrap cover dimensions. |
+| `estimate_royalties(book_id, list_price, marketplace="US", paper="white")` | Estimated eBook + paperback royalties per sale. |
+| `generate_marketing(book_id)` | Back-cover blurbs, A+ modules, author bio, taglines (mock mode inherited from the book). |
+| `get_kdp_listing(book_id)` | The copy-paste KDP listing text for an already-prepared kit. |
 
 A typical agent flow:
 
@@ -128,7 +135,7 @@ Then run `claude` from the project directory and the tools are available.
 
 - **"The 'mcp' package is required…"** — `pip install mcp` into the same
   interpreter named in `command`.
-- **`create_book` returns `{"error": "No ANTHROPIC_API_KEY set; ..."}`** — set
+- **`create_book` returns `{"error": "No credentials for LLM provider '...'; ..."}`** — set
   the key in the `env` block, or call with `mock=True`.
 - **Tools don't appear** — verify `command` points at the right Python and `cwd`
   is the project root; check the client's MCP logs.

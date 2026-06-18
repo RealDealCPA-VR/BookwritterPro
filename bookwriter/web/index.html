@@ -747,7 +747,9 @@
               <div class="field-row">
                 <div class="field">
                   <label for="set-img-auth">Authorization header</label>
-                  <input id="set-img-auth" type="text" data-opt="BOOKWRITER_IMAGE_AUTH" placeholder="Bearer your-key" />
+                  <!-- Secret: data-secret (not data-opt) so an empty field means
+                       "leave unchanged" instead of wiping the saved header. -->
+                  <input id="set-img-auth" type="password" autocomplete="off" data-secret="BOOKWRITER_IMAGE_AUTH" placeholder="Bearer your-key" />
                 </div>
                 <div class="field">
                   <label for="set-img-path">Result path</label>

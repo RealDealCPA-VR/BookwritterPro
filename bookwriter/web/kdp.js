@@ -582,10 +582,10 @@
       if (m.description != null) { desc.value = m.description; updateDesc(); }
       if (Array.isArray(m.keywords)) keywords.set(m.keywords);
       if (Array.isArray(m.categories)) cats.set(m.categories);
-      if (m.reading_age) {
-        if (m.reading_age.min != null) ageMin.value = String(m.reading_age.min);
-        if (m.reading_age.max != null) ageMax.value = String(m.reading_age.max);
-      }
+      // Server metadata (KdpMetadata.to_dict = asdict) carries FLAT
+      // reading_age_min / reading_age_max — not a nested reading_age object.
+      if (m.reading_age_min != null && m.reading_age_min !== "") ageMin.value = String(m.reading_age_min);
+      if (m.reading_age_max != null && m.reading_age_max !== "") ageMax.value = String(m.reading_age_max);
     }
 
     // ---------------------------------------------------- Auto-fill with AI

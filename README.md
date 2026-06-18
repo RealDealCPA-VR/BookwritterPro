@@ -295,7 +295,7 @@ bookwriter/
   server/        FastAPI app, service layer, SSE event broker
   serve.py       `python -m bookwriter.serve`
   mcp_server.py  MCP stdio server (17 tools)
-  web/           the studio UI (index.html, styles.css, app.js, covers.js, palette.js)
+  web/           the studio UI (index.html, styles.css, app.js, covers.js, palette.js, kdp.js)
 docs/            ARCHITECTURE.md · MCP.md · screenshots/
 tests/           144 offline tests
 ```

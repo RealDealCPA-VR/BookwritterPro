@@ -29,7 +29,7 @@ The layering rule that governs the whole codebase:
                                     ▼               │               ▼
         ┌─────────────────────────────────┐        │      ┌──────────────────┐
         │  HTTP API  bookwriter/server/    │        │      │  MCP server      │
-        │  api.py  create_app() -> FastAPI │        │      │  server/mcp_*.py │
+        │  api.py  create_app() -> FastAPI │        │      │  mcp_server.py   │
         │   • static frontend at "/"        │       │      │  (tools wrap the │
         │   • JSON API under "/api"          │      │      │   same pipeline) │
         │   • SSE  /api/books/{id}/events     │     │      └────────┬─────────┘
@@ -95,7 +95,7 @@ the raw material.
 | `costs.py` | `CostLedger` — per-call token + dollar accounting, cache-savings, `$/1k words`. |
 | `store.py` | `BookStore(project_dir)`: load/save graph & bible, `has_chapter(n)`, `assemble_manuscript`, `chapter_md(n)`, `book_path`. |
 | `pipeline.py` | `BookPipeline` orchestrator — `.plan()`, `.load()`, `.write_all()`, exposes `.graph` and `.ledger`, emits `on_event` dicts. |
-| `cli.py` / `__main__.py` | `bookwriter` CLI (`profiles`, `plan`, `write`, `generate`, `report`). |
+| `cli.py` / `__main__.py` | `bookwriter` CLI (`profiles`, `plan`, `write`, `generate`, `report`, `kdp`, `price`). |
 
 ### `BookPipeline` surface
 
@@ -164,14 +164,20 @@ API under `/api`. CORS is enabled for localhost.
 `project_dir`) plus a `meta.json` `{id,title,created_at,profile,mock,genre,logline}`.
 The **book id** is `slug(title) + "-" + 6-char hash`.
 
-### Endpoint table (authoritative contract)
+### Endpoint table (core routes)
+
+This lists the core generation routes. The server also registers `GET /api/providers`,
+`GET|PUT /api/settings`, `POST /api/settings/test`, `GET /api/books/{id}/chapters/{n}/image`,
+the KDP/publishing routes (`POST|GET /api/books/{id}/kdp`, `/kdp/listing`,
+`/export/epub`, `/export/docx`, `/print`, `POST /pricing`, `POST /marketing`) — see
+`bookwriter/server/api.py` for the complete set (and `/docs` for live OpenAPI).
 
 | Method | Path | Purpose / notable behavior |
 |---|---|---|
 | GET | `/api/health` | `{status:"ok", has_api_key:bool}` |
 | GET | `/api/profiles` | `{default:"balanced", profiles:[{name, stages:{plan,write,extract,check:{model,effort}}, prices:{model:{input,output}}}]}` |
 | GET | `/api/books` | `{books:[BookSummary]}` |
-| POST | `/api/books` | Plans **synchronously**. Body `CreateBookRequest{premise(req), chapters?, words_per_chapter=2000, title?, genre?, guidance?, profile="balanced", mock=false, use_cache=true, run_continuity_check=true}` → `{book:BookSummary, bible:<dict>}`. `mock=false` with no `ANTHROPIC_API_KEY` → **400** `{detail:"No ANTHROPIC_API_KEY set; enable demo mode (mock) or set a key."}` |
+| POST | `/api/books` | Plans **synchronously**. Body `CreateBookRequest{premise(req), chapters?, words_per_chapter=2000, title?, genre?, guidance?, profile="balanced", mock=false, use_cache=true, run_continuity_check=true}` → `{book:BookSummary, bible:<dict>}`. `mock=false` with no credentials for the selected provider → **400** `{detail:"No credentials for LLM provider '<p>'; enable demo mode (mock) or set ANTHROPIC_API_KEY."}` |
 | GET | `/api/books/{id}` | `{book:BookSummary, bible:<dict>, chapters:[{number,title,act,written,word_count}], cost:<snapshot|null>}` |
 | POST | `/api/books/{id}/write` | Starts a **background** write job (`stream_prose=True`). Body `WriteRequest{only?:int[], restart?:bool}` → `{status:"started"}`. **409** if a job is already running for this id. |
 | GET | `/api/books/{id}/events` | **SSE** (`text/event-stream`). Streams `on_event` dicts as JSON `data:` lines, plus a terminal `{type:"done"}` (or `{type:"error",message}`). Late subscribers get a **replay** of events from the current/last job, then tail. Periodic `:\n\n` heartbeat. |
@@ -220,12 +226,14 @@ The **book id** is `slug(title) + "-" + 6-char hash`.
 
 ---
 
-## 6. MCP server (`bookwriter/server/`)
+## 6. MCP server (`bookwriter/mcp_server.py`)
 
 An optional Model Context Protocol surface exposes the same engine as tools to an
-MCP host (e.g. a Claude client). It depends on the `mcp` package (`pip install
--r requirements-server.txt` or `.[mcp]`), imported **only inside the server
-package**. Tools wrap the identical `BookPipeline` operations used by the HTTP
+MCP host (e.g. a Claude client). It is the top-level module `bookwriter/mcp_server.py`
+(run via `python -m bookwriter.mcp_server`) and depends on the `mcp` package
+(`pip install -r requirements-server.txt` or `.[mcp]`), imported **lazily inside
+`build_server()`/`main()`** so the core package imports without it. Tools wrap the
+identical `BookPipeline` operations used by the HTTP
 API — create/plan a book, write chapters, fetch the bible / graph / chapters /
 cost / manuscript — so the engine has a single source of truth and the MCP layer
 is a thin adapter over the core, never a fork of its logic. Progress is surfaced

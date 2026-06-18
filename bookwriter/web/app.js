@@ -19,7 +19,13 @@ const API = {
     const text = await res.text();
     if (text) { try { data = JSON.parse(text); } catch { data = { raw: text }; } }
     if (!res.ok) {
-      const msg = (data && (data.detail || data.message)) || `Request failed (${res.status})`;
+      let detail = data && (data.detail || data.message);
+      // FastAPI 422 bodies can carry detail as an array of error objects; flatten
+      // to a readable string so the toast never shows "[object Object]".
+      if (Array.isArray(detail)) {
+        detail = detail.map((d) => (d && d.msg) ? d.msg : (typeof d === "string" ? d : JSON.stringify(d))).join("; ");
+      }
+      const msg = detail || `Request failed (${res.status})`;
       const err = new Error(msg); err.status = res.status; err.data = data;
       throw err;
     }
@@ -1004,6 +1010,14 @@ const SettingsModal = {
       const k = el.getAttribute("data-opt");
       if (k in d.options && d.options[k]) el.value = d.options[k];
     });
+
+    // Secret custom-HTTP auth header: never echoed in full — show a "saved"
+    // placeholder from the masked hint; empty on save = leave unchanged.
+    const authEl = node.querySelector("#set-img-auth");
+    if (authEl) {
+      const info = (d.keys && d.keys.BOOKWRITER_IMAGE_AUTH) || { set: false, masked: "" };
+      if (info.set) authEl.placeholder = `Saved (${info.masked}) — type to replace`;
+    }
 
     // Key rows.
     const wrap = node.querySelector("#set-keys");
