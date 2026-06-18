@@ -192,6 +192,22 @@ class TestAPI(unittest.TestCase):
             for k in ("id", "title", "chapters_total", "chapters_written"):
                 self.assertIn(k, b)
 
+    def test_list_books_ignores_settings_file(self):
+        # Regression: settings.json (and any non-book file) lives in the data dir.
+        # It must NOT make /api/books 404 — that broke the whole library for any
+        # user who had ever saved settings.
+        id_a = self._create_book(title="Alpha")["book"]["id"]
+        # The settings store writes <data_dir>/settings.json; simulate it.
+        with open(os.path.join(self._tmp.name, "settings.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+        # And a stray non-book directory.
+        os.makedirs(os.path.join(self._tmp.name, "not_a_book.tmp"), exist_ok=True)
+        r = self.client.get("/api/books")
+        self.assertEqual(r.status_code, 200, r.text)
+        ids = {b["id"] for b in r.json()["books"]}
+        self.assertIn(id_a, ids)
+        self.assertNotIn("settings.json", ids)
+
     def test_write_to_completion_and_artifacts(self):
         book_id = self._create_book()["book"]["id"]
         self._drive_write_to_completion(book_id)

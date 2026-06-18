@@ -8,6 +8,9 @@ venv/
 /*book*/book.json
 *.egg-info/
 .pytest_cache/
+# build artifacts
+build/
+dist/
 # server data + scratch
 .bookwriter_data/
 .demo_data/

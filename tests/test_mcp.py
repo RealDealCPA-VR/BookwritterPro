@@ -120,6 +120,27 @@ class TestMCPService(unittest.TestCase):
         if words is not None:
             self.assertGreater(words, 0)
 
+    def test_local_summary_includes_words(self):
+        # Directly exercise the local-fallback summary path (_LocalBookService),
+        # which must include a `words` field matching the HTTP contract.
+        import bookwriter.mcp_server as m
+        created = self.svc.create_book(
+            premise="A cartographer maps a city that rearranges itself nightly.",
+            chapters=2, words_per_chapter=120, title="Words Smoke",
+            genre="fantasy", mock=True,
+        )
+        book_id = self._book_id(created)
+        self.svc.write_book(book_id)
+
+        local = m._LocalBookService(self._tmp.name)
+        # get_book nests the summary under "book"; list_books returns it flat.
+        book = local.get_book(book_id)["book"]
+        self.assertIn("words", book)
+        self.assertGreater(book["words"], 0)
+        listed = {b["id"]: b for b in local.list_books()}
+        self.assertIn("words", listed[book_id])
+        self.assertEqual(listed[book_id]["words"], book["words"])
+
 
 if __name__ == "__main__":
     unittest.main()

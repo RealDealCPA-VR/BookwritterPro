@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 from typing import Any, AsyncIterator, Dict
 
@@ -34,6 +35,8 @@ from .schemas import (
     WriteRequest,
 )
 from .service import BookService, ServiceError
+
+logger = logging.getLogger(__name__)
 
 # Heartbeat interval (seconds) for the SSE stream.
 _HEARTBEAT = 15.0
@@ -75,7 +78,9 @@ def create_app(data_dir: str | None = None) -> FastAPI:
             "http://127.0.0.1:8000",
         ],
         allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
-        allow_credentials=True,
+        # No cookies/auth are used, so credentialed CORS buys nothing — keep it off
+        # to shrink the surface.
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -84,6 +89,13 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     @app.exception_handler(ServiceError)
     async def _service_error(_req: Request, exc: ServiceError) -> JSONResponse:
         return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
+
+    @app.exception_handler(Exception)
+    async def _unhandled(_req: Request, exc: Exception) -> JSONResponse:
+        # Log the full traceback server-side; return a generic message so internal
+        # details (paths, provider error bodies) never leak to the client.
+        logger.exception("Unhandled error on %s", getattr(_req, "url", "?"))
+        return JSONResponse(status_code=500, content={"detail": "Internal server error."})
 
     # ================================================================== #
     # API routes

@@ -113,6 +113,12 @@ def make_image_provider(provider: Optional[str] = None) -> "ImageProvider":
 
 def _request(method: str, url: str, *, headers: dict, data: Optional[bytes] = None,
              timeout: float = 60.0) -> Tuple[int, bytes]:
+    # Only ever speak http(s). A custom/compromised image endpoint could return a
+    # file:// (or other-scheme) URL that urllib would happily open and we'd save as
+    # a "chapter image" — refuse anything but http/https.
+    scheme = urllib.parse.urlparse(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise RuntimeError(f"Refusing non-http(s) image URL: {url!r}")
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:

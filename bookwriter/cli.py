@@ -293,7 +293,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args) or 0
+    except KeyboardInterrupt:
+        print("\nInterrupted.", file=sys.stderr)
+        return 130
+    except SystemExit:
+        raise  # argparse / explicit exits already carry a code
+    except Exception as e:  # noqa: BLE001 - turn any failure into a tidy non-zero exit
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

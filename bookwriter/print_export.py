@@ -258,7 +258,7 @@ def print_spec(graph, meta, *, trim=(6.0, 9.0), paper="white") -> Dict[str, Any]
         f"Page count estimated at ~{WORDS_PER_PAGE_6x9} words/page for {trim_w}x{trim_h}; "
         f"KDP enforces a {MIN_PAGE_COUNT}-page minimum for paperbacks.",
         f"Spine width uses the APPROXIMATE B&W {paper}-paper constant "
-        f"{per_page} in/page; spines under ~{int(round(100))} pages may be too thin "
+        f"{per_page} in/page; spines under ~100 pages may be too thin "
         f"for spine text.",
         f"Full-wrap cover = back + spine + front + {BLEED_IN}\" bleed on every edge.",
         f"Canvas px computed at {DEFAULT_DPI} DPI (KDP's required cover resolution).",

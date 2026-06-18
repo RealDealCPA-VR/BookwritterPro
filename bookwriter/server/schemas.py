@@ -16,12 +16,14 @@ from pydantic import BaseModel, Field
 # Requests
 # --------------------------------------------------------------------------- #
 class CreateBookRequest(BaseModel):
-    premise: str = Field(..., min_length=1)
-    chapters: Optional[int] = None
-    words_per_chapter: int = 2000
-    title: Optional[str] = None
-    genre: Optional[str] = None
-    guidance: Optional[str] = None
+    # Bounds keep a single request from triggering runaway token spend / huge
+    # outputs (and a real cost-DoS if the app is ever exposed beyond localhost).
+    premise: str = Field(..., min_length=1, max_length=20000)
+    chapters: Optional[int] = Field(None, ge=1, le=200)
+    words_per_chapter: int = Field(2000, ge=100, le=20000)
+    title: Optional[str] = Field(None, max_length=300)
+    genre: Optional[str] = Field(None, max_length=200)
+    guidance: Optional[str] = Field(None, max_length=8000)
     profile: str = "balanced"
     mock: bool = False
     use_cache: bool = True
@@ -36,7 +38,7 @@ class CreateBookRequest(BaseModel):
 
 
 class WriteRequest(BaseModel):
-    only: Optional[List[int]] = None
+    only: Optional[List[int]] = Field(None, max_length=500)
     restart: bool = False
 
 
@@ -68,7 +70,7 @@ class KdpRequest(BaseModel):
 
 
 class PricingRequest(BaseModel):
-    list_price: float
+    list_price: float = Field(..., ge=0, le=100000)
     marketplace: str = "US"
     paper: str = "white"
 
@@ -171,13 +173,10 @@ class DeletedResponse(BaseModel):
     status: str = "deleted"
 
 
-class ProfileStage(BaseModel):
-    model: str
-    effort: str
-    thinking: bool = True
-
-
 class ProfileInfo(BaseModel):
+    # ``stages`` is a heterogeneous map ({plan: str, ..., check: {model, effort}})
+    # emitted verbatim by the service, so it stays Dict[str, Any] rather than a
+    # fixed per-stage model.
     name: str
     stages: Dict[str, Any]
     prices: Dict[str, Dict[str, float]]

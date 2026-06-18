@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -38,8 +39,10 @@ from ..kdp import (
 from ..print_export import build_docx, print_spec as _print_spec, build_print_cover_svg
 from ..royalties import estimate_page_count, estimate_royalties
 from ..pipeline import BookPipeline
-from ..store import BookStore
+from ..store import BookStore, _write_json
 from .broker import EventBroker
+
+logger = logging.getLogger(__name__)
 
 
 class ServiceError(Exception):
@@ -104,9 +107,10 @@ class BookService:
             return json.load(f)
 
     def _write_meta(self, book_id: str, meta: Dict[str, Any]) -> None:
+        # Atomic write: a crash mid-write must never corrupt meta.json (a corrupt
+        # meta makes the book un-listable -> effectively lost).
         os.makedirs(self._book_dir(book_id), exist_ok=True)
-        with open(self._meta_path(book_id), "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2, ensure_ascii=False)
+        _write_json(self._meta_path(book_id), meta)
 
     def _require_meta(self, book_id: str) -> Dict[str, Any]:
         if not self._book_exists(book_id):
@@ -271,12 +275,16 @@ class BookService:
     def list_books(self) -> Dict[str, Any]:
         books: List[Dict[str, Any]] = []
         for entry in sorted(os.listdir(self.data_dir)):
-            book_id = entry
-            if not self._book_exists(book_id):
+            # The data dir also holds non-book entries (notably settings.json).
+            # Skip anything that isn't a well-formed book id BEFORE it reaches
+            # validate_book_id (which would raise 404 and kill the whole listing).
+            if not _BOOK_ID_RE.match(entry):
                 continue
             try:
-                meta = self._read_meta(book_id)
-                books.append(self._summary(book_id, meta))
+                if not self._book_exists(entry):
+                    continue
+                meta = self._read_meta(entry)
+                books.append(self._summary(entry, meta))
             except Exception:
                 continue
         books.sort(key=lambda b: b.get("created_at", ""), reverse=True)
@@ -581,8 +589,7 @@ class BookService:
 
         meta_dict = result["metadata"]
         # Persist a kdp.json snapshot in the book dir for later retrieval.
-        with open(self._kdp_json_path(book_id), "w", encoding="utf-8") as f:
-            json.dump(meta_dict, f, indent=2, ensure_ascii=False)
+        _write_json(self._kdp_json_path(book_id), meta_dict)
 
         listing = ""
         listing_path = result["paths"].get("listing")
@@ -741,9 +748,7 @@ class BookService:
             raise ServiceError(500, f"Marketing generation failed: {e}")
 
         # Persist a marketing.json snapshot in the book dir.
-        path = os.path.join(self._book_dir(book_id), "marketing.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(marketing, f, indent=2, ensure_ascii=False)
+        _write_json(os.path.join(self._book_dir(book_id), "marketing.json"), marketing)
 
         return marketing
 
@@ -799,6 +804,9 @@ class BookService:
                 pipe.write_all(resume=not restart, only=only)
                 self.broker.publish(book_id, {"type": "done"})
             except Exception as e:  # noqa: BLE001 - surfaced to the client via SSE
+                # Always record the full traceback server-side — the SSE client may
+                # have disconnected, and we must not lose the failure.
+                logger.exception("write job failed for book %s", book_id)
                 self.broker.publish(book_id, {"type": "error", "message": str(e)})
 
         t = threading.Thread(target=_run, name=f"write-{book_id}", daemon=True)

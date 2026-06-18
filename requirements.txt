@@ -1,3 +1,6 @@
 # Runtime dependency for live generation only. The package imports and its test
 # suite runs with zero third-party installs (the LLM client is mockable).
-anthropic>=0.69
+# Capped below the next major so a breaking SDK release can't silently change the
+# request shape llm.py relies on. For a reproducible deploy, pin exact versions
+# in a constraints.txt (pip freeze) layered on top of these floors.
+anthropic>=0.69,<1

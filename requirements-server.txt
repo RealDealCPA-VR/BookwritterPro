@@ -4,7 +4,7 @@
 #   pip install -r requirements-server.txt
 #
 # Run the web app:  python -m bookwriter.serve   (or: bookwriter-serve)
-fastapi>=0.110
+fastapi>=0.110,<1
 uvicorn[standard]>=0.27
 httpx>=0.27
 

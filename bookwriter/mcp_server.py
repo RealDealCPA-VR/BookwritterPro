@@ -97,6 +97,23 @@ _service_lock = threading.Lock()
 _service_singleton: Any = None
 
 
+def _chapter_word_count(store: Any, n: int) -> int:
+    """Words written for chapter *n* from its on-disk JSON record (0 if absent).
+
+    Mirrors the HTTP BookService so the MCP summary's ``words`` field matches the
+    HTTP contract on the local-fallback path.
+    """
+    try:
+        path = store.chapter_json(n)
+        if not os.path.isfile(path):
+            return 0
+        with open(path, "r", encoding="utf-8") as f:
+            rec = json.load(f)
+        return int(rec.get("word_count", 0) or 0)
+    except Exception:
+        return 0
+
+
 def get_service() -> Any:
     """Return a process-wide book service.
 
@@ -401,17 +418,19 @@ class _LocalBookService:
         graph = store.load_graph()
         total = 0
         written = 0
+        words = 0
         title = meta.get("title", "")
         genre = meta.get("genre", "")
         logline = meta.get("logline", "")
         if graph is not None:
             total = len(graph.bible.outline)
             # Use on-disk truth (store.has_chapter) — the same definition the
-            # HTTP BookService._summary uses — so chapters_written matches across
-            # the MCP and HTTP surfaces for the same book.
-            written = sum(
-                1 for p in graph.bible.outline if store.has_chapter(p.number)
-            )
+            # HTTP BookService._summary uses — so chapters_written and words match
+            # across the MCP and HTTP surfaces for the same book.
+            for p in graph.bible.outline:
+                if store.has_chapter(p.number):
+                    written += 1
+                    words += _chapter_word_count(store, p.number)
             title = graph.bible.title or title
             genre = graph.bible.genre or genre
             logline = graph.bible.logline or logline
@@ -422,6 +441,7 @@ class _LocalBookService:
             "genre": genre,
             "chapters_total": total,
             "chapters_written": written,
+            "words": words,
             "created_at": meta.get("created_at", ""),
             "profile": meta.get("profile", "balanced"),
             "mock": bool(meta.get("mock", False)),

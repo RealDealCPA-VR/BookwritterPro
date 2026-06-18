@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from .config import Settings
@@ -17,6 +18,8 @@ from .writer import write_chapter
 from .extractor import extract_delta
 from .checker import check_chapter
 from .store import BookStore
+
+logger = logging.getLogger(__name__)
 
 Progress = Callable[[str], None]
 EventSink = Callable[[Dict[str, Any]], None]
@@ -134,23 +137,39 @@ class BookPipeline:
                 delta_cb = lambda t, n=number: self._emit(type="delta", number=n, text=t)
             rec = write_chapter(self.llm, self.settings, self.ledger, self.graph, plan,
                                 on_delta=delta_cb)
+            # Persist the expensive prose IMMEDIATELY, before the cheap extract/
+            # check stages run. A malformed-JSON failure in those mechanical
+            # stages must never discard a chapter we already generated and paid
+            # for — that would also break resumability at the exact failure point.
+            self.store.save_chapter(rec)
             self.progress(f"Chapter {number}: {rec.word_count} words. Extracting state...")
 
-            delta = extract_delta(self.llm, self.settings, self.ledger, self.graph, plan, rec)
-            self.graph.apply_delta(delta)
-            self.graph.record_chapter(rec, delta.synopsis_line, self.settings.synopsis_line_chars)
+            flags: List[str] = []
+            synopsis = ""
+            try:
+                delta = extract_delta(self.llm, self.settings, self.ledger, self.graph, plan, rec)
+                self.graph.apply_delta(delta)
+                synopsis = delta.synopsis_line
+                flags = list(delta.continuity_flags)
+                if self.settings.run_continuity_check:
+                    issues = check_chapter(self.llm, self.settings, self.ledger, self.graph, plan, rec)
+                    flags += [f"[{i.get('severity', '?')}] {i.get('description', '')}" for i in issues]
+            except Exception as e:  # noqa: BLE001 - extract/check are mechanical; degrade, don't abort
+                logger.exception("state extraction/continuity failed for chapter %s", number)
+                flags.append(f"[warning] state extraction skipped ({e}); chapter saved, continuity not updated")
+                self.progress(f"  [!] state extraction failed: {e} (chapter kept, continuing)")
 
-            flags = list(delta.continuity_flags)
-            if self.settings.run_continuity_check:
-                issues = check_chapter(self.llm, self.settings, self.ledger, self.graph, plan, rec)
-                flags += [f"[{i.get('severity', '?')}] {i.get('description', '')}" for i in issues]
             if flags:
                 self.progress(f"  [!] continuity flags: {len(flags)}")
                 for fl in flags:
                     self.progress(f"    - {fl}")
 
-            self.store.save_chapter(rec)
+            # Record the chapter in the graph (degraded synopsis is fine) so a
+            # resumed run skips it, then persist graph + a cost snapshot per
+            # chapter (so an interrupted run keeps accurate cost accounting).
+            self.graph.record_chapter(rec, synopsis, self.settings.synopsis_line_chars)
             self.store.save_graph(self.graph)
+            self.store.save_cost(self.ledger.report(), _ledger_dict(self.ledger))
 
             has_image = self._maybe_make_image(plan)
 

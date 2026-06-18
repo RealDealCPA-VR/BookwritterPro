@@ -6,10 +6,10 @@
 
 **Type a premise. Watch the cover design itself as you type. Generate a whole novel chapter‑by‑chapter, live. Read it like a real book. Track every token.**
 
-A local‑first book‑generation studio with a beautiful editorial UI, an HTTP API, and a Model‑Context‑Protocol server — so a human *or an AI agent* can use it as a tool.
+A local‑first book‑generation studio with a sleek, modern UI, an HTTP API, and a Model‑Context‑Protocol server — so a human *or an AI agent* can use it as a tool.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-112%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-144%20passing-2ea44f)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![MCP](https://img.shields.io/badge/MCP-17%20tools-7c3aed)
 ![KDP](https://img.shields.io/badge/Amazon%20KDP-fast%20publish-FF9900?logo=amazon&logoColor=white)
@@ -51,7 +51,7 @@ Most "AI writer" apps give you a chat box and a wall of text. BookwriterPro give
 - 🔌 **Bring any model — or your *subscription*.** Pick the AI per book right in the setup modal: the Anthropic, OpenAI, or OpenRouter API — **or generate on your Claude / ChatGPT / Grok monthly subscription** with no API key and no per‑token billing.
 - 🎨 **Illustrated chapters.** Flip one toggle and every chapter gets its own art, generated from the story bible — **defaulting to Pixio**, or any image API you like. Images land inline in the reader *and* embed straight into the EPUB.
 - ⌨️ **⌘K everything.** A Linear/Raycast‑class command palette to jump anywhere.
-- 🌗 **Gorgeous in light *and* dark.** A true warm‑paper / espresso re‑theme, not a lazy invert. Fully responsive down to mobile.
+- 🌗 **Gorgeous in light *and* dark.** A sleek, minimal design — neutral surfaces, one confident accent, crisp type — with a true dark theme, not a lazy invert. Fully responsive down to mobile.
 - 🤖 **An agent can drive the whole thing** — write *and* publish — via 17 MCP tools or a clean HTTP/OpenAPI API.
 
 > A panel of independent design critics scored the rendered UI a **9/10 — "a polished, premium, shipped product."**
@@ -106,8 +106,9 @@ Every book is configured in a **Create AI Book** setup panel — chapters, lengt
 | **OpenAI** | GPT via the API | `OPENAI_API_KEY` |
 | **OpenRouter** | one key, dozens of models | `OPENROUTER_API_KEY` |
 | **Claude subscription** | `claude -p` (Claude Code) | Pro/Max login — *no API key* |
-| **ChatGPT subscription** | `codex exec` (Codex CLI) | Plus/Pro login — *no API key* |
-| **Grok subscription** | a Grok CLI | X Premium / SuperGrok login |
+| **ChatGPT subscription** | `codex exec -` (Codex CLI) | Plus/Pro login — *no API key* |
+| **Grok** | `grok --prompt` (Grok CLI) | xAI key (`GROK_API_KEY`) in the CLI's env |
+| **Any other model** | a custom CLI, or any OpenAI‑compatible endpoint | `BOOKWRITER_CLI_CMD`, or `OPENAI_BASE_URL` |
 
 ```bash
 # write on your Claude Pro/Max subscription instead of paying per token
@@ -243,10 +244,39 @@ Three surfaces over one engine: a **vanilla, no‑build web SPA**, a **FastAPI H
 
 ---
 
+## 🚢 Running it in production
+
+BookwriterPro is **local‑first and single‑user by design** — it ships no authentication. A few rules keep that safe:
+
+- **It binds `127.0.0.1` by default.** It **refuses** a non‑local bind unless you opt in:
+
+  ```bash
+  # exposing it to a network requires an explicit opt-in AND your own auth in front
+  BOOKWRITER_ALLOW_REMOTE=1 BOOKWRITER_HOST=0.0.0.0 python -m bookwriter.serve
+  ```
+
+  Only do this **behind a reverse proxy that adds authentication and TLS** — anyone who can reach the app can spend your tokens, read/change settings, and delete books.
+- **Run a single process.** Live state (the SSE broker, the one‑job‑per‑book lock, the settings store) lives in memory, so do **not** run multiple uvicorn/gunicorn workers — they'd split that state. Scale by running one process per user, not one process with N workers.
+- **Secrets stay local.** API keys entered in **Settings** are written to `<data_dir>/settings.json` (`.bookwriter_data/`, git‑ignored), masked in the API, and never logged or returned in full. On a shared host, lock down the data dir's permissions.
+- **Requests are bounded** (chapter count, words/chapter, premise length) so a single call can't trigger runaway spend, and chapter prose is persisted **before** the cheap continuity stages run, so a bad model response never discards a paid‑for chapter — interrupted runs resume cleanly.
+- **Logging:** set `BOOKWRITER_LOG_LEVEL=DEBUG` for verbose server logs (default `INFO`). Background write‑job failures are always logged with a full traceback.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `BOOKWRITER_HOST` / `BOOKWRITER_PORT` | `127.0.0.1` / `8000` | bind address |
+| `BOOKWRITER_ALLOW_REMOTE` | unset | required to bind a non‑local host |
+| `BOOKWRITER_DATA_DIR` | `./.bookwriter_data` | where books + `settings.json` live |
+| `BOOKWRITER_LOG_LEVEL` | `INFO` | server log verbosity |
+| `BOOKWRITER_LLM_PROVIDER` | `anthropic` | default backend (`anthropic`/`openai`/`openrouter`/`claude-cli`/`codex`/`grok-cli`/`cli`) |
+
+Install with capped, reproducible dependencies; for a locked deploy, layer a `pip freeze` constraints file on top of the floors in `requirements*.txt`.
+
+---
+
 ## 🧪 Tested & solid
 
 ```bash
-python -m unittest discover -s tests      # 72 tests, runs fully offline (mock model)
+python -m pytest -q                       # 144 tests, runs fully offline (mock model)
 ```
 
 The whole package imports and its test suite runs with **zero third‑party installs** (the LLM client is mockable). Server/MCP tests skip cleanly if those extras aren't installed.
@@ -267,7 +297,7 @@ bookwriter/
   mcp_server.py  MCP stdio server (17 tools)
   web/           the studio UI (index.html, styles.css, app.js, covers.js, palette.js)
 docs/            ARCHITECTURE.md · MCP.md · screenshots/
-tests/           72 offline tests
+tests/           144 offline tests
 ```
 
 ---
