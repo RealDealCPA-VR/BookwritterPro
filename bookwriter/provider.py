@@ -109,14 +109,14 @@ def tier_of(anthropic_model: str) -> str:
 # Per-provider defaults. All overridable via the BOOKWRITER_MODEL_* env vars.
 _PROVIDER_DEFAULTS = {
     "openai": {
-        "strong": "gpt-4o",
-        "mid": "gpt-4o-mini",
-        "cheap": "gpt-4o-mini",
+        "strong": "gpt-4.1",
+        "mid": "gpt-4.1-mini",
+        "cheap": "gpt-4.1-nano",
     },
     "openrouter": {
-        "strong": "openai/gpt-4o",
-        "mid": "openai/gpt-4o-mini",
-        "cheap": "openai/gpt-4o-mini",
+        "strong": "openai/gpt-4.1",
+        "mid": "openai/gpt-4.1-mini",
+        "cheap": "openai/gpt-4.1-mini",
     },
     # claude-cli speaks Anthropic model *aliases* to the CLI's --model flag.
     "claude-cli": {
@@ -126,13 +126,22 @@ _PROVIDER_DEFAULTS = {
     },
 }
 
-# Default argv for each subscription CLI, overridable via env. The prompt is fed
-# on stdin (see GenericCliLLM), so these are just the base command + subcommand.
+# Default argv for each subscription CLI, overridable via env.
+#   codex:    `codex exec -` — the trailing "-" tells Codex to read the whole
+#             prompt from stdin (the hang-proof, documented non-interactive form).
+#   grok-cli: `grok --prompt <text>` — bare `grok` opens an interactive TUI and
+#             ignores stdin, so the prompt must be passed as an ARGUMENT after
+#             --prompt (see STDIN_FALSE_PROVIDERS / make_llm).
+#   cli:      no default — must be supplied via BOOKWRITER_CLI_CMD.
 _CLI_DEFAULTS = {
-    "codex": ["codex", "exec"],
-    "grok-cli": ["grok"],
-    "cli": [],  # no default — must be supplied via BOOKWRITER_CLI_CMD
+    "codex": ["codex", "exec", "-"],
+    "grok-cli": ["grok", "--prompt"],
+    "cli": [],
 }
+
+# Providers whose CLI does NOT read the prompt from stdin — the prompt is appended
+# as a positional argument instead (see GenericCliLLM(stdin=False)).
+STDIN_FALSE_PROVIDERS = frozenset({"grok-cli"})
 
 _CLI_CMD_ENV = {
     "codex": "BOOKWRITER_CODEX_CMD",
@@ -171,6 +180,12 @@ def target_model(provider: str, anthropic_model: str) -> str:
 # meter is representative rather than zero. Unknown ids cost 0 (see costs.py),
 # which is harmless. Override pricing by editing MODEL_PRICES if needed.
 _EXTRA_PRICES = {
+    "gpt-4.1": ModelPrice.from_base(2.0, 8.0),
+    "gpt-4.1-mini": ModelPrice.from_base(0.4, 1.6),
+    "gpt-4.1-nano": ModelPrice.from_base(0.1, 0.4),
+    "openai/gpt-4.1": ModelPrice.from_base(2.0, 8.0),
+    "openai/gpt-4.1-mini": ModelPrice.from_base(0.4, 1.6),
+    # Legacy gpt-4o family kept priced so older books / overrides still meter.
     "gpt-4o": ModelPrice.from_base(2.5, 10.0),
     "gpt-4o-mini": ModelPrice.from_base(0.15, 0.6),
     "openai/gpt-4o": ModelPrice.from_base(2.5, 10.0),
@@ -270,8 +285,8 @@ def missing_credentials_message(provider: Optional[str] = None) -> str:
         "openrouter": "set OPENROUTER_API_KEY",
         "claude-cli": "install and log in to the Claude Code CLI (`claude`)",
         "codex": "install the OpenAI Codex CLI and sign in with ChatGPT (`codex login`)",
-        "grok-cli": "install a Grok CLI signed in to your subscription "
-                    "(set BOOKWRITER_GROK_CMD if its command isn't `grok`)",
+        "grok-cli": "install the Grok CLI and give it an xAI key (GROK_API_KEY) "
+                    "(set BOOKWRITER_GROK_CMD if its command isn't `grok --prompt`)",
         "cli": "set BOOKWRITER_CLI_CMD to your signed-in CLI command",
         "anthropic": "set ANTHROPIC_API_KEY",
     }
@@ -323,7 +338,8 @@ def make_llm(mock: bool = False, provider: Optional[str] = None,
         from .llm_cli import GenericCliLLM
         model_flag = rc.getenv("BOOKWRITER_CLI_MODEL_FLAG") or None
         return GenericCliLLM(command=cli_command(p), provider=p,
-                             model_flag=model_flag, model_override=model)
+                             model_flag=model_flag, model_override=model,
+                             stdin=(p not in STDIN_FALSE_PROVIDERS))
 
     from .llm import AnthropicLLM
     return AnthropicLLM(api_key=rc.getenv("ANTHROPIC_API_KEY"), model_override=model)
@@ -351,14 +367,15 @@ MODEL_CATALOG = {
         ("claude-haiku-4-5", "Haiku 4.5 — fastest & cheapest"),
     ],
     "openai": [
-        ("gpt-4o", "GPT-4o — best quality"),
-        ("gpt-4o-mini", "GPT-4o mini — fast & cheap"),
+        ("gpt-4.1", "GPT-4.1 — best quality"),
+        ("gpt-4.1-mini", "GPT-4.1 mini — balanced"),
+        ("gpt-4.1-nano", "GPT-4.1 nano — fastest & cheapest"),
     ],
     "openrouter": [
-        ("openai/gpt-4o", "GPT-4o"),
-        ("openai/gpt-4o-mini", "GPT-4o mini"),
-        ("anthropic/claude-3.5-sonnet", "Claude 3.5 Sonnet"),
-        ("meta-llama/llama-3.1-70b-instruct", "Llama 3.1 70B"),
+        ("openai/gpt-4.1", "GPT-4.1"),
+        ("openai/gpt-4.1-mini", "GPT-4.1 mini"),
+        ("anthropic/claude-3.7-sonnet", "Claude 3.7 Sonnet"),
+        ("meta-llama/llama-3.3-70b-instruct", "Llama 3.3 70B"),
     ],
     "claude-cli": [
         ("opus", "Claude Opus (subscription)"),

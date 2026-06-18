@@ -50,8 +50,10 @@ class TestProviderSelection(_EnvGuard):
             self.assertEqual(provider.provider_name(), want)
 
     def test_cli_command_resolution(self):
-        self.assertEqual(provider.cli_command("codex"), ["codex", "exec"])
-        self.assertEqual(provider.cli_command("grok-cli"), ["grok"])
+        # codex reads the prompt from stdin via the "-" sentinel; grok takes the
+        # prompt as an argument after --prompt (bare `grok` opens a TUI).
+        self.assertEqual(provider.cli_command("codex"), ["codex", "exec", "-"])
+        self.assertEqual(provider.cli_command("grok-cli"), ["grok", "--prompt"])
         self.assertEqual(provider.cli_command("cli"), [])
         os.environ["BOOKWRITER_CODEX_CMD"] = "codex exec --full-auto"
         self.assertEqual(provider.cli_command("codex"), ["codex", "exec", "--full-auto"])
@@ -71,9 +73,9 @@ class TestProviderSelection(_EnvGuard):
         self.assertEqual(provider.tier_of("claude-haiku-4-5"), "cheap")
 
     def test_target_model_defaults_and_override(self):
-        self.assertEqual(provider.target_model("openai", "claude-opus-4-8"), "gpt-4o")
+        self.assertEqual(provider.target_model("openai", "claude-opus-4-8"), "gpt-4.1")
         self.assertEqual(provider.target_model("openrouter", "claude-haiku-4-5"),
-                         "openai/gpt-4o-mini")
+                         "openai/gpt-4.1-mini")
         self.assertEqual(provider.target_model("claude-cli", "claude-sonnet-4-6"), "sonnet")
         os.environ["BOOKWRITER_MODEL_STRONG"] = "my/model"
         self.assertEqual(provider.target_model("openai", "claude-opus-4-8"), "my/model")
@@ -172,7 +174,7 @@ class TestOpenAIAdapter(unittest.TestCase):
         )
         self.assertEqual(out, {"a": 1, "b": "x"})
         # model id was translated to the openai default
-        self.assertEqual(client.calls[0]["model"], "gpt-4o")
+        self.assertEqual(client.calls[0]["model"], "gpt-4.1")
         self.assertEqual(client.calls[0]["response_format"], {"type": "json_object"})
         self.assertEqual(len(ledger.entries), 1)
         self.assertEqual(ledger.entries[0].input_tokens, 100)
@@ -361,6 +363,58 @@ class TestGenericCliAdapter(unittest.TestCase):
         from bookwriter.llm_cli import GenericCliLLM
         with self.assertRaises(RuntimeError):
             GenericCliLLM(command=[], provider="cli")
+
+    def test_grok_passes_prompt_as_arg_not_stdin(self):
+        # Bare `grok` opens an interactive TUI and ignores stdin, so the prompt
+        # must be appended as an argument after --prompt (stdin stays empty).
+        from bookwriter.llm_cli import GenericCliLLM
+        runner = self._runner("A grok answer.")
+        llm = GenericCliLLM(command=["grok", "--prompt"], provider="grok-cli",
+                            stdin=False, runner=runner)
+        text = llm.complete_text(stage="write", model=self._model(), system="sys",
+                                 user="write ch1", max_tokens=10, ledger=CostLedger())
+        self.assertEqual(text, "A grok answer.")
+        self.assertEqual(runner.captured["stdin"], "")
+        self.assertEqual(runner.captured["args"][:2], ["grok", "--prompt"])
+        # the full prompt is the trailing positional argument
+        self.assertIn("write ch1", runner.captured["args"][-1])
+        self.assertNotIn("write ch1", runner.captured["stdin"])
+
+
+class TestMakeLlmCliRouting(_EnvGuard):
+    """make_llm wires each subscription CLI with the right argv + stdin mode."""
+
+    def test_grok_routed_with_stdin_false(self):
+        os.environ["BOOKWRITER_LLM_PROVIDER"] = "grok"
+        llm = provider.make_llm()
+        self.assertFalse(llm.stdin)
+        self.assertEqual(llm.command, ["grok", "--prompt"])
+
+    def test_codex_routed_with_stdin_true_and_sentinel(self):
+        os.environ["BOOKWRITER_LLM_PROVIDER"] = "codex"
+        llm = provider.make_llm()
+        self.assertTrue(llm.stdin)
+        self.assertEqual(llm.command, ["codex", "exec", "-"])
+
+
+class TestAnthropicThinkingParam(unittest.TestCase):
+    """_thinking_param: adaptive when on; disabled off — except Fable 5, which
+    400s on an explicit disabled and must omit the param (returns None)."""
+
+    def test_adaptive_when_thinking_on(self):
+        from bookwriter.llm import _thinking_param
+        sm = StageModel("claude-opus-4-8", thinking=True)
+        self.assertEqual(_thinking_param(sm), {"type": "adaptive"})
+
+    def test_disabled_for_standard_models(self):
+        from bookwriter.llm import _thinking_param
+        sm = StageModel("claude-haiku-4-5", thinking=False)
+        self.assertEqual(_thinking_param(sm), {"type": "disabled"})
+
+    def test_omitted_for_fable5_when_disabled(self):
+        from bookwriter.llm import _thinking_param
+        sm = StageModel("claude-fable-5", thinking=False)
+        self.assertIsNone(_thinking_param(sm))
 
 
 if __name__ == "__main__":

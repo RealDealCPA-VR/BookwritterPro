@@ -46,8 +46,18 @@ def _build_system(system: str, cached: Optional[str], use_cache: bool, cache_ttl
     return blocks
 
 
-def _thinking_param(sm: StageModel) -> Dict[str, Any]:
-    return {"type": "adaptive"} if sm.thinking else {"type": "disabled"}
+# Models that reject an explicit thinking:{"type":"disabled"} with a 400 — for
+# these the param must be *omitted* to turn thinking off, not set to disabled.
+_THINKING_OMIT_WHEN_DISABLED = frozenset({"claude-fable-5"})
+
+
+def _thinking_param(sm: StageModel) -> Optional[Dict[str, Any]]:
+    """The ``thinking`` request value, or ``None`` to omit the param entirely."""
+    if sm.thinking:
+        return {"type": "adaptive"}
+    if sm.model in _THINKING_OMIT_WHEN_DISABLED:
+        return None
+    return {"type": "disabled"}
 
 
 def _output_config(sm: StageModel, fmt: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -89,9 +99,11 @@ class AnthropicLLM:
             "max_tokens": max_tokens,
             "system": sys_blocks,
             "messages": [{"role": "user", "content": user}],
-            "thinking": _thinking_param(model),
             "output_config": out_cfg,
         }
+        think = _thinking_param(model)
+        if think is not None:
+            params["thinking"] = think
         resp = self.client.messages.create(**params)
         self._record(ledger, stage, mdl, resp, cache_ttl)
         text = next((b.text for b in resp.content if getattr(b, "type", "") == "text"), "")
@@ -108,8 +120,10 @@ class AnthropicLLM:
             "max_tokens": max_tokens,
             "system": sys_blocks,
             "messages": [{"role": "user", "content": user}],
-            "thinking": _thinking_param(model),
         }
+        think = _thinking_param(model)
+        if think is not None:
+            kwargs["thinking"] = think
         if out_cfg:
             kwargs["output_config"] = out_cfg
         # Stream long prose to avoid SDK HTTP timeouts on large max_tokens, and to
