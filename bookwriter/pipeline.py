@@ -36,7 +36,9 @@ def _noop_event(_: Dict[str, Any]) -> None:
 class BookPipeline:
     """Orchestrator. Beyond the human-readable ``progress`` string callback, it
     emits structured ``on_event`` dicts (plan_done, chapter_start, delta,
-    chapter_done, cost, manuscript_done) — the backbone the HTTP SSE stream and
+    chapter_done, manuscript_done); the plan_done / chapter_done / manuscript_done
+    events each carry a ``cost`` snapshot field. This is the
+    backbone the HTTP SSE stream and
     the MCP server both consume to drive live UIs and agents.
     """
 

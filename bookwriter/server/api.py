@@ -49,7 +49,11 @@ def _default_data_dir() -> str:
     if env:
         return env
     here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(here, ".bookwriter_data")
+    # In a source checkout `here` is the repo root; for a pip-installed wheel it is
+    # site-packages (read-only / wiped on upgrade) — fall back to the user's home.
+    if os.path.isfile(os.path.join(here, "pyproject.toml")):
+        return os.path.join(here, ".bookwriter_data")
+    return os.path.join(os.path.expanduser("~"), ".bookwriter_data")
 
 
 def create_app(data_dir: str | None = None) -> FastAPI:
@@ -67,7 +71,8 @@ def create_app(data_dir: str | None = None) -> FastAPI:
         broker.bind_loop(asyncio.get_running_loop())
         yield
 
-    app = FastAPI(title="BookwriterPro", version="0.1.0", lifespan=_lifespan)
+    from .. import __version__
+    app = FastAPI(title="BookwriterPro", version=__version__, lifespan=_lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -89,6 +94,20 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     @app.exception_handler(ServiceError)
     async def _service_error(_req: Request, exc: ServiceError) -> JSONResponse:
         return JSONResponse(status_code=exc.status, content={"detail": exc.detail})
+
+    from fastapi.exceptions import RequestValidationError
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_error(_req: Request, exc: RequestValidationError) -> JSONResponse:
+        # FastAPI's default 422 body has detail as a list of objects, which the
+        # frontend (which expects a string) renders as "[object Object]". Collapse
+        # it to a readable single-string message.
+        parts = []
+        for e in exc.errors():
+            loc = ".".join(str(x) for x in e.get("loc", []) if x != "body")
+            msg = e.get("msg", "invalid")
+            parts.append(f"{loc}: {msg}" if loc else msg)
+        return JSONResponse(status_code=422, content={"detail": "; ".join(parts) or "Invalid request."})
 
     @app.exception_handler(Exception)
     async def _unhandled(_req: Request, exc: Exception) -> JSONResponse:

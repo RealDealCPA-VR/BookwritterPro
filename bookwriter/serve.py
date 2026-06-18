@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from typing import Optional
 
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 

@@ -92,7 +92,9 @@ def verify(provider: Optional[str] = None) -> dict:
         return _prov.verify("openai")
     if p == "http":
         url = rc.getenv("BOOKWRITER_IMAGE_URL")
-        return ({"ok": True, "detail": f"Custom endpoint configured: {url}"} if url
+        # Config-only check: we don't POST a real generation here, so make clear
+        # this is not a live reachability/auth test (unlike pixio/openai above).
+        return ({"ok": True, "detail": f"Endpoint configured (not live-tested): {url}"} if url
                 else {"ok": False, "detail": "BOOKWRITER_IMAGE_URL not set."})
     return {"ok": False, "detail": f"Unknown image provider '{p}'."}
 
@@ -282,7 +284,10 @@ class HttpImageProvider:
         self.auth = rc.getenv("BOOKWRITER_IMAGE_AUTH") or ""
         self.body_tpl = rc.getenv("BOOKWRITER_IMAGE_BODY") or '{"prompt": "{prompt}"}'
         self.result_path = rc.getenv("BOOKWRITER_IMAGE_RESULT_PATH") or "url"
-        self.result_b64 = bool(rc.getenv("BOOKWRITER_IMAGE_RESULT_B64"))
+        # Parse as a real boolean: bool("0")/bool("false") are both True, so
+        # `=0`/`=false` (meaning "off") must not accidentally enable base64 mode.
+        self.result_b64 = (rc.getenv("BOOKWRITER_IMAGE_RESULT_B64") or "").strip().lower() \
+            in ("1", "true", "yes", "on")
 
     def generate(self, prompt: str, *, timeout: float = 180.0) -> Tuple[bytes, str]:
         if not self.url:

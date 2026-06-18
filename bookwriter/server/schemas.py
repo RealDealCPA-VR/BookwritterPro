@@ -53,8 +53,10 @@ class VerifyRequest(BaseModel):
 
 
 class KdpRequest(BaseModel):
-    author_first: str
-    author_last: str
+    # Optional so "Auto-fill with AI" works before an author is entered (the book
+    # summary carries no author); generate_kdp_metadata tolerates blanks.
+    author_first: str = ""
+    author_last: str = ""
     language: str = "English"
     subtitle: Optional[str] = None
     series: str = ""
