@@ -26,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .broker import EventBroker, TERMINAL_TYPES
 from .schemas import (
+    CoverRequest,
     CreateBookRequest,
     KdpRequest,
     MarketingRequest,
@@ -229,6 +230,31 @@ def create_app(data_dir: str | None = None) -> FastAPI:
             path,
             media_type="application/epub+zip",
             filename=fname,
+            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        )
+
+    # -- AI cover / back cover / PDF exports ---------------------------
+    @app.post("/api/books/{book_id}/cover/generate")
+    async def generate_cover(book_id: str, req: CoverRequest) -> Dict[str, Any]:
+        # Calls the image provider (network) + writes art; run off the loop.
+        return await asyncio.to_thread(service.generate_cover, book_id, req)
+
+    @app.api_route("/api/books/{book_id}/export/back-cover", methods=["GET", "HEAD"])
+    async def export_back_cover(book_id: str) -> Response:
+        svg = await asyncio.to_thread(service.back_cover_svg, book_id)
+        fname = service.docx_filename(book_id).replace(".docx", "-back-cover.svg")
+        return Response(
+            content=svg,
+            media_type="image/svg+xml",
+            headers={"Content-Disposition": f'inline; filename="{fname}"'},
+        )
+
+    @app.get("/api/books/{book_id}/export/pdf")
+    async def export_pdf(book_id: str, part: str = Query("full")) -> Response:
+        data, fname = await asyncio.to_thread(service.export_pdf, book_id, part)
+        return Response(
+            content=data,
+            media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{fname}"'},
         )
 

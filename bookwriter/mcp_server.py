@@ -343,6 +343,15 @@ class _ServiceAdapter:
     def generate_marketing(self, book_id: str) -> Dict[str, Any]:
         return self._local.generate_marketing(book_id)
 
+    def generate_cover(self, book_id: str, **kw) -> Dict[str, Any]:
+        return self._local.generate_cover(book_id, **kw)
+
+    def back_cover(self, book_id: str) -> Dict[str, Any]:
+        return self._local.back_cover(book_id)
+
+    def export_pdf(self, book_id: str, part: str = "full", **kw) -> Dict[str, Any]:
+        return self._local.export_pdf(book_id, part, **kw)
+
 
 def _flatten_create(res: Dict[str, Any]) -> Dict[str, Any]:
     """Turn the HTTP {book, bible} into the flat MCP create_book payload."""
@@ -852,6 +861,106 @@ class _LocalBookService:
             paper=paper or "white",
         )
 
+    # ---- AI cover / back cover / PDF (parity with the HTTP service) --------
+    def _kdp_meta_or_minimal(self, book_id: str, graph) -> Any:
+        """Saved KDP metadata if prepare_kdp ran, else a minimal one — WITHOUT an
+        LLM call (covers/PDFs only need title/author + any saved copy)."""
+        from bookwriter.kdp import KdpMetadata
+        meta_json = os.path.join(self._kdp_dir(book_id), "metadata.json")
+        if os.path.exists(meta_json):
+            with open(meta_json, "r", encoding="utf-8") as f:
+                return KdpMetadata.from_dict(json.load(f))
+        return KdpMetadata(title=graph.bible.title or "Untitled",
+                           author_first="", author_last="")
+
+    def _load_cover_art(self, book_id: str):
+        d = self._kdp_dir(book_id)
+        if not os.path.isdir(d):
+            return None, None
+        for name in sorted(os.listdir(d)):
+            if name.startswith("cover-art."):
+                try:
+                    with open(os.path.join(d, name), "rb") as f:
+                        return f.read(), name.rsplit(".", 1)[-1].lower()
+                except OSError:
+                    return None, None
+        return None, None
+
+    def generate_cover(self, book_id: str, *, title: str = "",
+                       subtitle: Optional[str] = None,
+                       author_first: Optional[str] = None,
+                       author_last: Optional[str] = None) -> Dict[str, Any]:
+        """Generate AI cover artwork + composed front cover.svg into <book>/kdp/."""
+        self._read_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        from bookwriter.images import image_available, generate_cover_art
+        if not image_available():
+            raise RuntimeError("No image backend configured — set PIXIO_API_KEY to "
+                               "generate an AI cover.")
+        art, ext = generate_cover_art(graph.bible)
+        ext = (ext or "png").lower().lstrip(".")
+        d = self._kdp_dir(book_id)
+        os.makedirs(d, exist_ok=True)
+        for name in list(os.listdir(d)):
+            if name.startswith("cover-art."):
+                try:
+                    os.remove(os.path.join(d, name))
+                except OSError:
+                    pass
+        with open(os.path.join(d, f"cover-art.{ext}"), "wb") as f:
+            f.write(art)
+        km = self._kdp_meta_or_minimal(book_id, graph)
+        if title:
+            km.title = title
+        if subtitle is not None:
+            km.subtitle = subtitle
+        if author_first is not None:
+            km.author_first = author_first
+        if author_last is not None:
+            km.author_last = author_last
+        from bookwriter.kdp import compose_cover_svg
+        path = os.path.join(d, "cover.svg")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(compose_cover_svg(km, art, ext))
+        return {"path": path, "art_path": os.path.join(d, f"cover-art.{ext}")}
+
+    def back_cover(self, book_id: str) -> Dict[str, Any]:
+        """Render the back cover SVG (blurb + bio + imprint) into <book>/kdp/."""
+        self._read_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        km = self._kdp_meta_or_minimal(book_id, graph)
+        art, ext = self._load_cover_art(book_id)
+        from bookwriter.kdp import back_cover_svg
+        d = self._kdp_dir(book_id)
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "back-cover.svg")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(back_cover_svg(graph, km, art_bytes=art, ext=ext or "png"))
+        return {"path": path}
+
+    def export_pdf(self, book_id: str, part: str = "full", *,
+                   trim=(6.0, 9.0)) -> Dict[str, Any]:
+        """Build a PDF (interior|front-cover|back-cover|full) into <book>/kdp/."""
+        self._read_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        from bookwriter import pdf as _pdf
+        if not _pdf.pdf_available():
+            raise RuntimeError(_pdf._INSTALL_HINT)
+        part = (part or "full").lower()
+        if part not in _pdf.PDF_PARTS:
+            raise ValueError(f"unknown PDF part {part!r}; choose from {list(_pdf.PDF_PARTS)}")
+        if part in ("interior", "full") and not graph.chapters:
+            raise BookNotFound(f"{book_id} has no written chapters; write_book first")
+        km = self._kdp_meta_or_minimal(book_id, graph)
+        art, ext = self._load_cover_art(book_id)
+        data = _pdf.build_pdf(part, graph, km, art_bytes=art, ext=ext or "png", trim=trim)
+        d = self._kdp_dir(book_id)
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"{part}.pdf")
+        with open(path, "wb") as f:
+            f.write(data)
+        return {"path": path}
+
     def generate_marketing(self, book_id: str) -> Dict[str, Any]:
         """Generate marketing copy (blurbs, A+ modules, bio, taglines) and cache it."""
         from bookwriter.kdp import generate_marketing as _generate_marketing
@@ -1263,6 +1372,55 @@ def build_server():
             return get_service().generate_marketing(book_id)
         except BookNotFound as e:
             return {"error": f"book not found: {e}"}
+
+    @mcp.tool()
+    def generate_cover(book_id: str, title: str = "", subtitle: str = "",
+                       author_first: str = "", author_last: str = "") -> Dict[str, Any]:
+        """Generate a catchy AI cover (artwork + title/author typography).
+
+        Calls the configured image backend (default Pixio — needs PIXIO_API_KEY)
+        to paint text-free cover ARTWORK from the story bible, then composes a
+        finished front cover with the title/author typeset over it. Saves the raw
+        art and the composed `kdp/cover.svg`, which prepare_kdp/EPUB/PDF reuse.
+        Optional title/subtitle/author override the typography.
+
+        Returns {"path": <cover.svg>, "art_path": <cover-art.png>} or {"error":...}.
+        """
+        try:
+            return get_service().generate_cover(
+                book_id, title=title, subtitle=subtitle,
+                author_first=author_first, author_last=author_last)
+        except (BookNotFound, RuntimeError) as e:
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def generate_back_cover(book_id: str) -> Dict[str, Any]:
+        """Render the back cover (blurb + author bio + imprint + barcode area).
+
+        Uses the KDP metadata's back-cover blurb and author bio (from prepare_kdp)
+        and the generated cover artwork as a matching darkened background. Saves
+        `kdp/back-cover.svg`. Returns {"path": <back-cover.svg>} or {"error":...}.
+        """
+        try:
+            return get_service().back_cover(book_id)
+        except BookNotFound as e:
+            return {"error": f"book not found: {e}"}
+
+    @mcp.tool()
+    def export_pdf(book_id: str, part: str = "full") -> Dict[str, Any]:
+        """Export the book as a PDF and return its path.
+
+        part = "interior" (no cover), "front-cover", "back-cover", or "full"
+        (front cover + interior + back cover). Embeds the generated cover artwork
+        when present. Needs the optional reportlab dependency (pip install
+        bookwriterpro[pdf]); interior/full require written chapters.
+
+        Returns {"path": <pdf path>} or {"error": ...}.
+        """
+        try:
+            return get_service().export_pdf(book_id, part)
+        except (BookNotFound, ValueError, RuntimeError) as e:
+            return {"error": str(e)}
 
     return mcp
 

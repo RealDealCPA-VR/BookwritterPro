@@ -221,6 +221,82 @@ def cmd_price(args) -> int:
     return 0
 
 
+def _cli_kdp_meta(project: str, graph):
+    """Saved KDP metadata (from a prior `kdp` run) or a minimal one (no LLM)."""
+    import json as _json
+    from .kdp import KdpMetadata
+    mj = os.path.join(project, "kdp", "metadata.json")
+    if os.path.isfile(mj):
+        with open(mj, encoding="utf-8") as f:
+            return KdpMetadata.from_dict(_json.load(f))
+    return KdpMetadata(title=graph.bible.title or "Untitled", author_first="", author_last="")
+
+
+def _cli_cover_art(project: str):
+    d = os.path.join(project, "kdp")
+    if os.path.isdir(d):
+        for name in sorted(os.listdir(d)):
+            if name.startswith("cover-art."):
+                with open(os.path.join(d, name), "rb") as f:
+                    return f.read(), name.rsplit(".", 1)[-1].lower()
+    return None, None
+
+
+def cmd_cover(args) -> int:
+    from .images import image_available, generate_cover_art
+    from .kdp import compose_cover_svg
+
+    store = BookStore(args.project)
+    graph = store.load_graph()
+    if graph is None:
+        raise SystemExit("error: no plan found in project; run 'generate' first")
+    if not image_available():
+        raise SystemExit("error: no image backend configured — set PIXIO_API_KEY "
+                         "(or BOOKWRITER_IMAGE_PROVIDER) to generate an AI cover")
+    art, ext = generate_cover_art(graph.bible)
+    ext = (ext or "png").lower().lstrip(".")
+    d = os.path.join(args.project, "kdp")
+    os.makedirs(d, exist_ok=True)
+    for name in list(os.listdir(d)):
+        if name.startswith("cover-art."):
+            try:
+                os.remove(os.path.join(d, name))
+            except OSError:
+                pass
+    art_path = os.path.join(d, f"cover-art.{ext}")
+    with open(art_path, "wb") as f:
+        f.write(art)
+    meta = _cli_kdp_meta(args.project, graph)
+    svg_path = os.path.join(d, "cover.svg")
+    with open(svg_path, "w", encoding="utf-8") as f:
+        f.write(compose_cover_svg(meta, art, ext))
+    print(f"AI cover generated:\n  art:   {art_path}\n  cover: {svg_path}")
+    return 0
+
+
+def cmd_pdf(args) -> int:
+    from . import pdf as _pdf
+
+    store = BookStore(args.project)
+    graph = store.load_graph()
+    if graph is None:
+        raise SystemExit("error: no plan found in project; run 'generate' first")
+    if not _pdf.pdf_available():
+        raise SystemExit("error: " + _pdf._INSTALL_HINT)
+    part = args.part
+    if part in ("interior", "full") and not graph.chapters:
+        raise SystemExit("error: no chapters written; run 'write' first")
+    meta = _cli_kdp_meta(args.project, graph)
+    art, ext = _cli_cover_art(args.project)
+    data = _pdf.build_pdf(part, graph, meta, art_bytes=art, ext=ext or "png")
+    out = args.out or os.path.join(args.project, "kdp", f"{part}.pdf")
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+    with open(out, "wb") as f:
+        f.write(data)
+    print(f"PDF ({part}) written to {out}  ({len(data):,} bytes)")
+    return 0
+
+
 def cmd_profiles(_args) -> int:
     print("Quality profiles (stage -> model):\n")
     for name, p in QUALITY_PROFILES.items():
@@ -296,6 +372,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--paper", default="white", choices=["white", "cream"],
                     help="paperback paper stock (default white)")
     sp.set_defaults(func=cmd_price)
+
+    sp = sub.add_parser("cover", help="generate a catchy AI cover (art + typography) via the image backend")
+    add_common(sp, generating=False)
+    sp.set_defaults(func=cmd_cover)
+
+    sp = sub.add_parser("pdf", help="export the book as a PDF (interior / front-cover / back-cover / full)")
+    add_common(sp, generating=False)
+    sp.add_argument("--part", default="full",
+                    choices=["interior", "front-cover", "back-cover", "full"],
+                    help="which PDF to build (default full)")
+    sp.add_argument("--out", default="", help="output path (default <project>/kdp/<part>.pdf)")
+    sp.set_defaults(func=cmd_pdf)
 
     sp = sub.add_parser("profiles", help="list quality profiles and pricing")
     sp.set_defaults(func=cmd_profiles)

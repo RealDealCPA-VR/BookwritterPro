@@ -81,6 +81,16 @@ class MarketingRequest(BaseModel):
     mock: Optional[bool] = None
 
 
+class CoverRequest(BaseModel):
+    # Optional typography overrides so the generated cover matches the live form;
+    # all fall back to the saved/planned metadata when omitted.
+    title: Optional[str] = Field(None, max_length=300)
+    subtitle: Optional[str] = Field(None, max_length=300)
+    author_first: Optional[str] = Field(None, max_length=120)
+    author_last: Optional[str] = Field(None, max_length=120)
+    mock: Optional[bool] = None
+
+
 # --------------------------------------------------------------------------- #
 # Responses
 # --------------------------------------------------------------------------- #

@@ -585,7 +585,14 @@ class BookService:
         out_dir = self._kdp_dir(book_id)
         images = BookStore(self._book_dir(book_id)).collect_images(
             [p.number for p in graph.bible.outline])
-        result = build_kdp_kit(graph, kdp_meta, out_dir, cover_svg=req.cover_svg, images=images)
+        # Prefer the client's cover; else a previously generated AI cover.svg.
+        cover_svg = req.cover_svg
+        if not cover_svg:
+            saved = os.path.join(out_dir, "cover.svg")
+            if os.path.isfile(saved):
+                with open(saved, "r", encoding="utf-8") as f:
+                    cover_svg = f.read()
+        result = build_kdp_kit(graph, kdp_meta, out_dir, cover_svg=cover_svg, images=images)
 
         meta_dict = result["metadata"]
         # Persist a kdp.json snapshot in the book dir for later retrieval.
@@ -707,6 +714,105 @@ class BookService:
             with open(cover_path, "r", encoding="utf-8") as f:
                 front = f.read()
         return build_print_cover_svg(graph, kdp_meta, spec, front_cover_svg=front)
+
+    # ------------------------------------------------------------------ #
+    # AI cover art / back cover / PDF exports
+    # ------------------------------------------------------------------ #
+    def _load_cover_art(self, book_id: str):
+        """Return (bytes, ext) for a previously generated AI cover, else (None, None)."""
+        d = self._kdp_dir(book_id)
+        if not os.path.isdir(d):
+            return None, None
+        for name in sorted(os.listdir(d)):
+            if name.startswith("cover-art."):
+                try:
+                    with open(os.path.join(d, name), "rb") as f:
+                        return f.read(), name.rsplit(".", 1)[-1].lower()
+                except OSError:
+                    return None, None
+        return None, None
+
+    def _cover_meta(self, book_id: str, meta: Dict[str, Any], graph, req) -> KdpMetadata:
+        """KdpMetadata for cover typography: saved meta, with form overrides."""
+        km = self._load_kdp_meta(book_id, meta, graph)
+        if req is not None:
+            if getattr(req, "title", None):
+                km.title = req.title.strip()
+            if getattr(req, "subtitle", None) is not None:
+                km.subtitle = (req.subtitle or "").strip()
+            if getattr(req, "author_first", None) is not None:
+                km.author_first = (req.author_first or "").strip()
+            if getattr(req, "author_last", None) is not None:
+                km.author_last = (req.author_last or "").strip()
+        return km
+
+    def generate_cover(self, book_id: str, req: "CoverRequest") -> Dict[str, Any]:  # type: ignore[name-defined]
+        """Generate AI cover ARTWORK via the image backend and compose a finished
+        front cover (art + title/author typography). Persists the raw art and the
+        composed cover.svg so the EPUB / print cover / PDFs reuse them."""
+        meta = self._require_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        from ..images import image_available, generate_cover_art
+        if not image_available():
+            raise ServiceError(
+                400,
+                "No image backend configured — set PIXIO_API_KEY (or choose an "
+                "image provider in Settings) to generate an AI cover.",
+            )
+        try:
+            art, ext = generate_cover_art(graph.bible)
+        except Exception as e:  # noqa: BLE001 - network/provider error -> client
+            raise ServiceError(502, f"AI cover generation failed: {e}")
+
+        ext = (ext or "png").lower().lstrip(".")
+        d = self._kdp_dir(book_id)
+        os.makedirs(d, exist_ok=True)
+        # Clear any prior art (possibly a different extension), then save.
+        for name in list(os.listdir(d)):
+            if name.startswith("cover-art."):
+                try:
+                    os.remove(os.path.join(d, name))
+                except OSError:
+                    pass
+        with open(os.path.join(d, f"cover-art.{ext}"), "wb") as f:
+            f.write(art)
+
+        km = self._cover_meta(book_id, meta, graph, req)
+        from ..kdp import compose_cover_svg
+        svg = compose_cover_svg(km, art, ext)
+        with open(os.path.join(d, "cover.svg"), "w", encoding="utf-8") as f:
+            f.write(svg)
+        return {"cover_svg": svg, "has_art": True}
+
+    def back_cover_svg(self, book_id: str) -> str:
+        meta = self._require_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        km = self._load_kdp_meta(book_id, meta, graph)
+        art, ext = self._load_cover_art(book_id)
+        from ..kdp import back_cover_svg as _bc
+        return _bc(graph, km, art_bytes=art, ext=ext or "png")
+
+    def export_pdf(self, book_id: str, part: str):
+        """Return (pdf_bytes, filename) for part in interior|front-cover|back-cover|full."""
+        meta = self._require_meta(book_id)
+        graph = self._load_graph_or_404(book_id)
+        from .. import pdf as _pdf
+        if not _pdf.pdf_available():
+            raise ServiceError(501, _pdf._INSTALL_HINT)
+        part = (part or "full").lower()
+        if part not in _pdf.PDF_PARTS:
+            raise ServiceError(400, f"Unknown PDF part {part!r}; choose from {list(_pdf.PDF_PARTS)}.")
+        # interior/full need written chapters; covers can render from metadata.
+        if part in ("interior", "full") and not graph.chapters:
+            raise ServiceError(404, f"Book {book_id!r} has no written chapters.")
+        km = self._load_kdp_meta(book_id, meta, graph)
+        art, ext = self._load_cover_art(book_id)
+        try:
+            data = _pdf.build_pdf(part, graph, km, art_bytes=art, ext=ext or "png")
+        except _pdf.PdfUnavailable as e:
+            raise ServiceError(501, str(e))
+        fname = f"{_slug(meta.get('title') or book_id)}-{part}.pdf"
+        return data, fname
 
     def estimate_pricing(self, book_id: str, req: "PricingRequest") -> Dict[str, Any]:  # type: ignore[name-defined]
         self._require_meta(book_id)
