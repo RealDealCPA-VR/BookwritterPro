@@ -10,3 +10,10 @@ httpx>=0.27
 
 # Only needed if you expose BookwriterPro as an MCP server.
 mcp>=1.2
+
+# Optional: PDF exports (interior / cover / back-cover / full book) on the
+# Publish screen. Without it the app runs fine; the PDF endpoints return a
+# clear "install reportlab" message.
+reportlab>=4,<5
+pillow>=10
+pypdf>=4

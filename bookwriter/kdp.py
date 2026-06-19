@@ -18,6 +18,7 @@ are NOT generated — they are captured from the caller and carried verbatim.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -53,11 +54,34 @@ KDP_SCHEMA: Dict[str, Any] = {
     "required": [
         "subtitle", "description", "keywords", "categories",
         "reading_age_min", "reading_age_max", "series_suggestion",
+        "back_cover_blurb", "author_bio", "edition", "series_part",
     ],
     "properties": {
         "subtitle": {
             "type": "string",
             "description": "Optional marketing subtitle (no colon); empty string if none.",
+        },
+        "back_cover_blurb": {
+            "type": "string",
+            "description": (
+                "A shorter, punchy BACK-COVER blurb (plain text, ~60-110 words, no "
+                "HTML) — the hook a browser reads on the physical back cover."
+            ),
+        },
+        "author_bio": {
+            "type": "string",
+            "description": (
+                "A short third-person author bio (1-3 sentences) for the back cover "
+                "/ Author Central. Invent a tasteful, generic bio if unknown."
+            ),
+        },
+        "edition": {
+            "type": "string",
+            "description": "Edition number, normally \"1\" for a first edition.",
+        },
+        "series_part": {
+            "type": "string",
+            "description": "Series part number (e.g. \"1\") if part of a series; else empty.",
         },
         "description": {
             "type": "string",
@@ -167,6 +191,8 @@ class KdpMetadata:
     primary_marketplace: str = "Amazon.com"
     categories: List[str] = field(default_factory=list)   # <= 3
     keywords: List[str] = field(default_factory=list)      # <= 7
+    author_bio: str = ""             # back cover / Author Central
+    back_cover_blurb: str = ""       # short plain-text back-cover hook
 
     # ---- convenience -------------------------------------------------------
     def author_full(self) -> str:
@@ -215,6 +241,19 @@ def _split_title(raw: str):
             head, _, tail = raw.partition(sep)
             return head.strip(), tail.strip()
     return raw, ""
+
+
+def _strip_tags(text: str) -> str:
+    """Crude HTML-tag strip so an HTML description renders as plain back-cover text."""
+    out, depth = [], 0
+    for ch in text or "":
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    return " ".join("".join(out).split())
 
 
 def _truncate_words(text: str, limit: int) -> str:
@@ -297,7 +336,10 @@ def generate_kdp_metadata(
         "up to 3 Kindle-store CATEGORIES appropriate to the genre. Provide a "
         "reading age ONLY for children's or YA books (leave blank for adult). "
         "Suggest a series name only if this clearly reads like book one of a "
-        "series. Return strictly the requested JSON schema."
+        "series. Also write a shorter plain-text BACK-COVER blurb (~60-110 words), "
+        "a short third-person AUTHOR BIO, an EDITION number (\"1\" for a first "
+        "edition), and a SERIES PART number if it's part of a series. Return "
+        "strictly the requested JSON schema."
     )
     user = (
         f"BOOK TITLE: {title}\n"
@@ -362,6 +404,17 @@ def generate_kdp_metadata(
         contribs.append({"first": str(c.get("first", "")).strip(),
                          "last": str(c.get("last", "")).strip()})
 
+    # Back-cover blurb (plain text) — fall back to a trimmed description.
+    back_cover_blurb = _strip_tags(str(data.get("back_cover_blurb") or "").strip())
+    if not back_cover_blurb:
+        back_cover_blurb = _truncate_words(_strip_tags(description), 700)
+    author_bio = str(data.get("author_bio") or "").strip()
+
+    # Edition / series part: caller wins; else accept the model's suggestion.
+    if not edition:
+        edition = (str(data.get("edition") or "")).strip()
+    series_part = (str(data.get("series_part") or "")).strip() if series else ""
+
     return KdpMetadata(
         title=title,
         subtitle=subtitle,
@@ -369,6 +422,7 @@ def generate_kdp_metadata(
         author_last=author_last,
         language=language or "English",
         series=series,
+        series_part=series_part,
         edition=edition,
         contributors=contribs,
         description=description,
@@ -376,6 +430,8 @@ def generate_kdp_metadata(
         keywords=keywords,
         reading_age_min=reading_age_min,
         reading_age_max=reading_age_max,
+        author_bio=author_bio,
+        back_cover_blurb=back_cover_blurb,
     )
 
 
@@ -526,6 +582,135 @@ def _fallback_cover_svg(meta: "KdpMetadata") -> str:
         f'  {sub_block}\n'
         f'  <text x="800" y="2360" font-family="Georgia, serif" font-size="72" '
         f'fill="#d8d3ca" text-anchor="middle">{author}</text>\n'
+        '</svg>\n'
+    )
+
+
+def _cover_wrap(text: str, max_chars: int, max_lines: int) -> List[str]:
+    """Greedy word-wrap into <= max_lines lines of ~max_chars chars (for SVG)."""
+    words = (text or "").split()
+    lines: List[str] = []
+    cur = ""
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > max_chars:
+            lines.append(cur)
+            cur = w
+            if len(lines) >= max_lines:
+                break
+        else:
+            cur = f"{cur} {w}".strip()
+    if cur and len(lines) < max_lines:
+        lines.append(cur)
+    return lines
+
+
+def _art_data_uri(art_bytes: bytes, ext: str) -> str:
+    media = _IMG_MEDIA.get((ext or "png").lower().lstrip("."), "image/png")
+    return f"data:{media};base64,{base64.b64encode(art_bytes).decode('ascii')}"
+
+
+def compose_cover_svg(meta: "KdpMetadata", art_bytes: bytes, ext: str = "png") -> str:
+    """Front cover = AI artwork (embedded raster) + crisp title/author typography.
+
+    1600x2560 (KDP-friendly ~1:1.6). A dark top+bottom scrim keeps the overlaid
+    text legible over any artwork. This SVG is what flows into the EPUB / print
+    cover; the PDF cover redraws the same composition natively (see pdf.py)."""
+    uri = _art_data_uri(art_bytes, ext)
+    title_lines = _cover_wrap(meta.title.upper(), 16, 3)
+    title_fs = 150 if len(title_lines) <= 2 else 120
+    t_spans = "".join(
+        f'<tspan x="800" dy="{0 if i == 0 else title_fs + 12}">{_esc(ln)}</tspan>'
+        for i, ln in enumerate(title_lines)
+    )
+    sub = (
+        f'<text x="800" y="{360 + len(title_lines) * (title_fs + 12)}" '
+        f'font-family="Georgia, serif" font-size="56" fill="#f0ece4" '
+        f'text-anchor="middle" opacity="0.92">{_esc(meta.subtitle)}</text>'
+        if meta.subtitle else ""
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+        'width="1600" height="2560" viewBox="0 0 1600 2560" '
+        'preserveAspectRatio="xMidYMid meet">\n'
+        '  <defs>\n'
+        '    <linearGradient id="scrim" x1="0" y1="0" x2="0" y2="1">\n'
+        '      <stop offset="0" stop-color="#000" stop-opacity="0.62"/>\n'
+        '      <stop offset="0.28" stop-color="#000" stop-opacity="0.05"/>\n'
+        '      <stop offset="0.72" stop-color="#000" stop-opacity="0.05"/>\n'
+        '      <stop offset="1" stop-color="#000" stop-opacity="0.72"/>\n'
+        '    </linearGradient>\n'
+        '  </defs>\n'
+        f'  <image x="0" y="0" width="1600" height="2560" xlink:href="{uri}" '
+        'preserveAspectRatio="xMidYMid slice"/>\n'
+        '  <rect width="1600" height="2560" fill="url(#scrim)"/>\n'
+        f'  <text x="800" y="300" font-family="Georgia, serif" font-size="{title_fs}" '
+        f'font-weight="bold" fill="#ffffff" text-anchor="middle" '
+        f'style="paint-order:stroke;stroke:#000;stroke-width:6px;stroke-opacity:0.35">{t_spans}</text>\n'
+        f'  {sub}\n'
+        f'  <text x="800" y="2400" font-family="Georgia, serif" font-size="68" '
+        f'fill="#ffffff" text-anchor="middle" '
+        f'style="paint-order:stroke;stroke:#000;stroke-width:5px;stroke-opacity:0.35">'
+        f'{_esc(meta.author_full())}</text>\n'
+        '</svg>\n'
+    )
+
+
+def back_cover_svg(graph, meta: "KdpMetadata", *, art_bytes: Optional[bytes] = None,
+                   ext: str = "png") -> str:
+    """A 1600x2560 back cover: blurb + author bio + imprint + barcode placeholder.
+
+    Uses the front-cover artwork as a darkened background when supplied (so the
+    front and back match), else a solid dark ground."""
+    if art_bytes:
+        bg = (
+            f'  <image x="0" y="0" width="1600" height="2560" '
+            f'xlink:href="{_art_data_uri(art_bytes, ext)}" '
+            'preserveAspectRatio="xMidYMid slice"/>\n'
+            '  <rect width="1600" height="2560" fill="#0c0e12" opacity="0.82"/>\n'
+        )
+    else:
+        bg = '  <rect width="1600" height="2560" fill="#15171c"/>\n'
+
+    blurb = _strip_tags(meta.back_cover_blurb or meta.description
+                        or getattr(graph.bible, "logline", "")
+                        or getattr(graph.bible, "premise", ""))
+    blurb_lines = _cover_wrap(blurb, 46, 18)
+    blurb_spans = "".join(
+        f'<tspan x="160" dy="{0 if i == 0 else 60}">{_esc(ln)}</tspan>'
+        for i, ln in enumerate(blurb_lines)
+    )
+
+    bio_block = ""
+    if meta.author_bio:
+        bio_lines = _cover_wrap(_strip_tags(meta.author_bio), 50, 8)
+        bio_spans = "".join(
+            f'<tspan x="160" dy="{0 if i == 0 else 46}">{_esc(ln)}</tspan>'
+            for i, ln in enumerate(bio_lines)
+        )
+        bio_y = 2560 - 620
+        bio_block = (
+            f'  <text x="160" y="{bio_y - 56}" font-family="Georgia, serif" '
+            f'font-size="34" font-style="italic" fill="#b9b4ab">About the author</text>\n'
+            f'  <text x="160" y="{bio_y}" font-family="Georgia, serif" font-size="36" '
+            f'fill="#e6e2da">{bio_spans}</text>\n'
+        )
+
+    creators = _esc(meta.author_full())
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+        'width="1600" height="2560" viewBox="0 0 1600 2560">\n'
+        + bg
+        + f'  <text x="160" y="280" font-family="Georgia, serif" font-size="44" '
+        f'fill="#e6e2da">{blurb_spans}</text>\n'
+        + bio_block
+        + f'  <text x="160" y="2400" font-family="Georgia, serif" font-size="30" '
+        f'fill="#a39e96">{creators} · Independently published</text>\n'
+        # ISBN / barcode placeholder (KDP prints the real one)
+        '  <rect x="1120" y="2300" width="320" height="170" rx="8" fill="#ffffff"/>\n'
+        '  <text x="1280" y="2400" font-family="Helvetica, Arial, sans-serif" '
+        'font-size="26" fill="#15171c" text-anchor="middle">ISBN / barcode</text>\n'
         '</svg>\n'
     )
 

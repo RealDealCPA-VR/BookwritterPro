@@ -360,3 +360,54 @@ def build_chapter_prompt(bible, plan) -> str:
         "No text, no words, no lettering, no captions, no borders."
     )
     return prompt[:1100]
+
+
+def build_cover_prompt(bible) -> str:
+    """A striking, text-free front-cover ART prompt from the story bible.
+
+    We deliberately ask for NO text/lettering — the title and author are overlaid
+    as crisp typography afterward (see kdp.compose_cover_svg), which is far more
+    legible and on-brand than letting the model render words.
+    """
+    mood = ", ".join(x for x in [bible.genre, bible.tone] if x) or "literary, atmospheric"
+    themes = ", ".join((bible.themes or [])[:3])
+    bits = []
+    if getattr(bible, "logline", ""):
+        bits.append(bible.logline)
+    elif getattr(bible, "premise", ""):
+        bits.append(bible.premise[:300])
+    if themes:
+        bits.append(f"Themes: {themes}")
+    subject = " ".join(bits)
+    prompt = (
+        "Striking, professional BOOK COVER ART, portrait orientation, single bold "
+        "focal image with strong silhouette and dramatic composition that reads at "
+        f"thumbnail size. {subject}. Genre & mood: {mood}. Rich, art-directed colour "
+        "palette, cinematic lighting, premium publishing aesthetic, lots of clean "
+        "negative space at the top and bottom for a title and author name. "
+        "Absolutely NO text, NO words, NO letters, NO title, NO typography, no logos, "
+        "no watermark, no borders, no frame."
+    )
+    return prompt[:1100]
+
+
+# Portrait aspect/size hints for a 1600x2560-ish (~1:1.6) book cover.
+_COVER_ASPECT = "2:3"
+_COVER_OPENAI_SIZE = "1024x1536"
+
+
+def generate_cover_art(bible, provider: Optional[str] = None,
+                       *, timeout: float = 180.0) -> Tuple[bytes, str]:
+    """Generate front-cover ARTWORK (no text) via the configured image backend.
+
+    Returns ``(image_bytes, ext)``. Raises if no backend is configured/usable —
+    callers surface that as a clear message. Forces a portrait cover aspect.
+    """
+    prov = make_image_provider(provider)
+    # Override the per-call aspect/size to portrait for a book cover (duck-typed:
+    # each backend exposes the relevant knob).
+    if hasattr(prov, "aspect"):
+        prov.aspect = _COVER_ASPECT
+    if hasattr(prov, "size"):
+        prov.size = _COVER_OPENAI_SIZE
+    return prov.generate(build_cover_prompt(bible), timeout=timeout)
