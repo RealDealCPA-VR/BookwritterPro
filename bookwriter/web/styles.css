@@ -2098,3 +2098,33 @@ body.cmdk-lock { overflow: hidden; }
   .cmdk-panel, .help-panel, .create-panel { transform: none !important; opacity: 1 !important; }
   ::view-transition-old(root), ::view-transition-new(root) { animation: none !important; }
 }
+
+/* ---------------- Import + chapter-modify (import/edit/revise/continue) ---- */
+.library-head-actions { display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; }
+.rail-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin-bottom: var(--s-3); }
+.rail-head .rail-title { margin: 0; }
+
+/* Reader header: let the modify bar sit on the right of act/title/words. */
+.reader-actions { display: inline-flex; gap: var(--s-2); margin-left: auto; align-items: center; }
+
+/* Inline manual chapter editor */
+.reader-editor { display: flex; flex-direction: column; gap: var(--s-3); }
+.reader-editor-text {
+  width: 100%; min-height: 48vh; resize: vertical;
+  font-family: var(--font-text); font-size: var(--t-base); line-height: 1.7;
+  color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); padding: var(--s-4);
+}
+.reader-editor-text:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.reader-editor-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
+.reader-editor-actions { display: inline-flex; gap: var(--s-3); margin-left: auto; }
+
+/* Import modal: a touch wider, comfortable for pasting a manuscript. */
+.import-panel { max-width: 760px; }
+.import-body .reader-editor-text, .import-body #im-text { min-height: 0; }
+#im-text {
+  width: 100%; resize: vertical; font-family: var(--font-text); font-size: var(--t-sm);
+  line-height: 1.6; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line-strong); border-radius: var(--radius); padding: var(--s-4);
+}
+#im-text:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }

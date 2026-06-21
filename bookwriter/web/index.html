@@ -115,10 +115,16 @@
           <p class="library-sub" id="library-sub">Every book you’ve dreamed up, bound and waiting.</p>
           <dl class="shelf-stats" id="shelf-stats" hidden></dl>
         </div>
-        <a class="btn btn-primary" href="#/new">
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          New book
-        </a>
+        <div class="library-head-actions">
+          <button class="btn btn-ghost" id="import-btn" type="button" data-action="import">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 15V3m0 12l-4-4m4 4l4-4M5 21h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Import manuscript
+          </button>
+          <a class="btn btn-primary" href="#/new">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            New book
+          </a>
+        </div>
       </div>
 
       <!-- Hero: a "continue writing" spotlight staged like a lit display niche.
@@ -351,7 +357,10 @@
       <div class="studio-grid">
         <!-- LEFT: outline -->
         <aside class="studio-rail studio-outline" aria-label="Chapter outline">
-          <h2 class="rail-title">Outline</h2>
+          <div class="rail-head">
+            <h2 class="rail-title">Outline</h2>
+            <button class="kdp-mini-btn" id="add-chapters-btn" type="button" title="Continue the story — propose more chapters">+ Add chapters</button>
+          </div>
           <ol class="chapter-list" id="chapter-list"></ol>
         </aside>
 
@@ -361,6 +370,10 @@
             <span class="reader-chip" id="reader-act">Act —</span>
             <h2 class="reader-title serif" id="reader-title">Select a chapter</h2>
             <span class="reader-words" id="reader-words"></span>
+            <div class="reader-actions" id="reader-actions" hidden>
+              <button class="kdp-mini-btn" id="ch-edit" type="button">Edit</button>
+              <button class="kdp-mini-btn" id="ch-revise" type="button">Revise with AI</button>
+            </div>
           </div>
           <article class="reader-body" id="reader-body" tabindex="0" aria-label="Chapter prose">
             <div class="reader-placeholder" id="reader-placeholder">
@@ -368,6 +381,17 @@
               <p>Press <strong>Generate</strong> to plan-and-write live, or pick a written chapter from the outline.</p>
             </div>
           </article>
+          <!-- Inline manual editor (hidden until "Edit"). -->
+          <div class="reader-editor" id="reader-editor" hidden>
+            <textarea id="reader-editor-text" class="reader-editor-text" aria-label="Edit chapter text"></textarea>
+            <div class="reader-editor-foot">
+              <span class="field-hint" id="reader-editor-hint"></span>
+              <span class="reader-editor-actions">
+                <button class="btn btn-ghost" id="ch-edit-cancel" type="button">Cancel</button>
+                <button class="btn btn-primary" id="ch-edit-save" type="button">Save chapter</button>
+              </span>
+            </div>
+          </div>
           <div class="reader-flags" id="reader-flags" hidden></div>
         </div>
 
@@ -786,6 +810,57 @@
             <p class="composer-note" id="set-note"></p>
             <button type="button" class="btn btn-primary btn-lg" id="set-save">
               <span class="btn-label">Save settings</span>
+              <span class="btn-spinner" aria-hidden="true"></span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Import manuscript modal — bring pre-written material in as a book.
+       Built/opened by ImportModal in app.js; fields prefixed `im-`. -->
+  <template id="tpl-import">
+    <div class="create-overlay import-overlay" role="dialog" aria-modal="true" aria-labelledby="im-title-h">
+      <div class="create-panel import-panel" role="document">
+        <div class="create-head">
+          <h2 id="im-title-h" class="serif">Import a manuscript</h2>
+          <button type="button" class="help-close im-close" aria-label="Close">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <div class="create-body import-body">
+          <form id="import-form" class="create-form" novalidate>
+            <p class="settings-intro">Already have a draft? Paste it or drop in a <code>.txt</code> / <code>.md</code> file. BookwriterPro splits it into chapters (on <em>Chapter N</em> or markdown headings), reverse-engineers the story bible &amp; continuity, and opens it as a normal book you can edit, revise, illustrate, and publish.</p>
+            <div class="field-row">
+              <div class="field">
+                <label for="im-title">Title <span class="opt">optional</span></label>
+                <input id="im-title" type="text" placeholder="Inferred from the text if blank" />
+              </div>
+              <div class="field">
+                <label for="im-genre">Genre <span class="opt">optional</span></label>
+                <input id="im-genre" type="text" placeholder="e.g. literary horror" />
+              </div>
+            </div>
+            <div class="field">
+              <label for="im-file">Upload a file <span class="opt">.txt / .md</span></label>
+              <input id="im-file" type="file" accept=".txt,.md,.markdown,.text,text/plain,text/markdown" />
+            </div>
+            <div class="field">
+              <label for="im-text">…or paste your manuscript <span class="req">*</span></label>
+              <textarea id="im-text" rows="12" placeholder="Paste your whole draft here. Use 'Chapter 1', 'Chapter One', or '## Heading' lines to mark chapters — or paste anything and it imports as one chapter you can split later."></textarea>
+              <p class="field-hint" id="im-stat">No text yet.</p>
+            </div>
+            <label class="check"><input type="checkbox" id="im-analyze" checked /> Analyze with AI <span class="muted">(reverse-engineer the bible + continuity)</span></label>
+            <label class="check"><input type="checkbox" id="im-mock" /> Demo mode <span class="muted">(offline, no key)</span></label>
+          </form>
+        </div>
+        <div class="create-foot">
+          <p class="create-step">Your chapters are preserved verbatim — analysis only adds the bible &amp; continuity around them.</p>
+          <div class="create-foot-actions">
+            <p class="composer-note" id="im-note"></p>
+            <button type="button" class="btn btn-primary btn-lg" id="im-submit">
+              <span class="btn-label">Import &amp; open</span>
               <span class="btn-spinner" aria-hidden="true"></span>
             </button>
           </div>

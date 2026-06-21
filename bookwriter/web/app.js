@@ -53,6 +53,11 @@ const API = {
   kdp: (id) => API._json("GET", `/books/${id}/kdp`),
   // Generate a catchy AI cover (artwork + typography) via the image backend.
   generateCover: (id, payload) => API._json("POST", `/books/${id}/cover/generate`, payload || {}),
+  // Import pre-written material + modify existing chapters.
+  importBook: (payload) => API._json("POST", "/books/import", payload || {}),
+  editChapter: (id, n, payload) => API._json("PUT", `/books/${id}/chapters/${n}`, payload || {}),
+  reviseChapter: (id, n, payload) => API._json("POST", `/books/${id}/chapters/${n}/revise`, payload || {}),
+  appendChapters: (id, payload) => API._json("POST", `/books/${id}/outline`, payload || {}),
 };
 
 /* ------------------------------- helpers -------------------------------- */
@@ -886,6 +891,88 @@ const CreateModal = {
 };
 window.CreateModal = CreateModal;
 
+/* ========================== IMPORT (modal) ========================== */
+// Bring pre-written material in as a first-class book: paste or upload, then
+// POST /books/import (split + reverse-engineer bible) and open the studio.
+const ImportModal = {
+  el: null, lastFocused: null,
+  open() {
+    if (ImportModal.el) return;
+    ImportModal.lastFocused = document.activeElement;
+    const node = tpl("tpl-import");
+    document.body.appendChild(node);
+    ImportModal.el = node;
+    node.addEventListener("mousedown", (e) => { if (e.target === node) ImportModal.close(); });
+    node.querySelector(".im-close").addEventListener("click", () => ImportModal.close());
+    node.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); ImportModal.close(); } });
+
+    const text = node.querySelector("#im-text");
+    const stat = node.querySelector("#im-stat");
+    const updateStat = () => {
+      const v = text.value.trim();
+      const words = v ? v.split(/\s+/).length : 0;
+      // quick chapter-count preview (matches the server splitter's heuristics)
+      const heads = (v.match(/^\s{0,3}#{1,3}\s+\S|^\s*(?:chapter|part)\s+/gim) || []).length;
+      stat.textContent = v ? `${fmtInt(words)} words · ~${heads || 1} chapter(s) detected` : "No text yet.";
+    };
+    text.addEventListener("input", updateStat);
+
+    node.querySelector("#im-file").addEventListener("change", async (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      try {
+        text.value = await f.text();
+        if (!node.querySelector("#im-title").value) {
+          node.querySelector("#im-title").value = f.name.replace(/\.[^.]+$/, "");
+        }
+        updateStat();
+      } catch { toast("Couldn't read that file.", { type: "error" }); }
+    });
+
+    node.querySelector("#im-submit").addEventListener("click", () => ImportModal.submit(node));
+    // .create-overlay is opacity:0 until .is-open (matches Create/Settings modals).
+    requestAnimationFrame(() => node.classList.add("is-open"));
+    setTimeout(() => text.focus(), 60);
+  },
+  close() {
+    const node = ImportModal.el;
+    if (!node) return;
+    ImportModal.el = null;
+    node.remove();
+    const prev = ImportModal.lastFocused; ImportModal.lastFocused = null;
+    if (prev && prev.focus) prev.focus();
+  },
+  async submit(node) {
+    const btn = node.querySelector("#im-submit");
+    const note = node.querySelector("#im-note");
+    const text = node.querySelector("#im-text").value.trim();
+    note.textContent = "";
+    if (!text) { note.textContent = "Paste or upload a manuscript first."; node.querySelector("#im-text").focus(); return; }
+    btn.classList.add("is-busy"); btn.disabled = true;
+    $(".btn-label", btn).textContent = "Importing…";
+    try {
+      const res = await API.importBook({
+        text,
+        title: node.querySelector("#im-title").value.trim() || undefined,
+        genre: node.querySelector("#im-genre").value.trim() || undefined,
+        analyze: node.querySelector("#im-analyze").checked,
+        mock: node.querySelector("#im-mock").checked,
+      });
+      const id = res && res.book && res.book.id;
+      toast("Manuscript imported.", { title: "Imported", type: "good" });
+      ImportModal.close();
+      if (id) Router.go(`#/b/${id}`); else Router.go("#/");
+    } catch (err) {
+      note.textContent = err.message || "Import failed.";
+      toast(err.message || "Import failed.", { title: "Couldn't import", type: "error" });
+    } finally {
+      btn.classList.remove("is-busy"); btn.disabled = false;
+      $(".btn-label", btn).textContent = "Import & open";
+    }
+  },
+};
+window.ImportModal = ImportModal;
+
 /* Live cover forge for the modal — the jacket designs itself from the title /
    topic / book-type, mirroring the composer's forge (reduced-motion-safe). */
 function bindForge(node, seed) {
@@ -1190,6 +1277,7 @@ Views.studio = async function (id) {
     t.setAttribute("href", href);
   });
   $("#generate-btn", view).addEventListener("click", Studio.onGenerate);
+  Studio.bindModify();
 
   // loading skeleton in reader
   $("#reader-body", view).innerHTML =
@@ -1373,6 +1461,9 @@ Studio.openChapter = async function (num) {
   const body = $("#reader-body");
   body.classList.remove("is-streaming");
   $("#reader-flags").hidden = true;
+  // Reset any open inline editor; hide the modify bar until a written chapter loads.
+  Studio.cancelEdit();
+  const acts = $("#reader-actions"); if (acts) acts.hidden = true;
 
   // streaming buffer takes precedence
   if (Studio.buffers[num] != null) {
@@ -1400,6 +1491,7 @@ Studio.openChapter = async function (num) {
     const ch = await API.chapter(Studio.id, num);
     Studio.renderHeaderForChapter(num, { act: (ch.plan && ch.plan.act) || meta.act, title: ch.title, word_count: ch.word_count });
     Studio.renderProse(ch.text, ch.image_url);
+    if (acts) acts.hidden = false;  // written → allow Edit / Revise
   } catch (err) {
     body.innerHTML = `<p class="rail-empty">Couldn't load chapter: ${esc(err.message)}</p>`;
   }
@@ -1412,6 +1504,88 @@ Studio.renderHeaderForChapter = function (num, meta) {
   const rwHdr = $("#reader-words");
   rwHdr.classList.remove("is-writing");
   rwHdr.textContent = meta.word_count ? `${fmtInt(meta.word_count)} words` : "";
+};
+
+/* ---- chapter modify: manual edit / AI revise / continue ---------------- */
+Studio.bindModify = function () {
+  const on = (sel, fn) => { const el = $(sel); if (el) el.addEventListener("click", fn); };
+  on("#ch-edit", () => Studio.startEdit());
+  on("#ch-revise", () => Studio.reviseChapter());
+  on("#ch-edit-save", () => Studio.saveEdit());
+  on("#ch-edit-cancel", () => Studio.cancelEdit());
+  on("#add-chapters-btn", () => Studio.addChapters());
+};
+
+Studio.cancelEdit = function () {
+  const ed = $("#reader-editor"); if (ed) ed.hidden = true;
+  const body = $("#reader-body"); if (body) body.hidden = false;
+};
+
+Studio.startEdit = async function () {
+  const num = Studio.active;
+  const meta = (Studio.data.chapters || []).find((c) => c.number === num);
+  if (!meta || !meta.written) { toast("Generate this chapter first, then edit it.", { type: "warn" }); return; }
+  const ed = $("#reader-editor"), ta = $("#reader-editor-text");
+  $("#reader-body").hidden = true; ed.hidden = false;
+  ta.value = "Loading…"; ta.disabled = true;
+  try {
+    const ch = await API.chapter(Studio.id, num);
+    ta.value = ch.text || ""; ta.disabled = false;
+    $("#reader-editor-hint").textContent = `Editing chapter ${num} — your text is saved verbatim.`;
+    ta.focus();
+  } catch (err) { ta.value = ""; ta.disabled = false; toast(err.message || "Couldn't load chapter.", { type: "error" }); }
+};
+
+Studio.saveEdit = async function () {
+  const num = Studio.active, ta = $("#reader-editor-text"), text = ta.value.trim();
+  if (!text) { toast("A chapter can't be empty.", { type: "error" }); return; }
+  const btn = $("#ch-edit-save"); btn.disabled = true;
+  try {
+    const r = await API.editChapter(Studio.id, num, { text });
+    const meta = (Studio.data.chapters || []).find((c) => c.number === num);
+    if (meta) { meta.word_count = r.word_count; meta.written = true; if (r.title) meta.title = r.title; }
+    Studio.cancelEdit();
+    Studio.renderChapters();
+    Studio.renderProse(text);
+    Studio.renderHeaderForChapter(num);
+    toast("Chapter saved.", { title: "Saved", type: "good" });
+  } catch (err) { toast(err.message || "Save failed.", { type: "error" }); }
+  finally { btn.disabled = false; }
+};
+
+Studio.reviseChapter = async function () {
+  const num = Studio.active;
+  const meta = (Studio.data.chapters || []).find((c) => c.number === num);
+  if (!meta || !meta.written) { toast("Generate this chapter first, then revise it.", { type: "warn" }); return; }
+  const instructions = window.prompt(
+    "How should the AI revise this chapter?\n(Leave blank to just polish the prose.)", "");
+  if (instructions === null) return;
+  const btn = $("#ch-revise"); btn.disabled = true; const label = btn.textContent; btn.textContent = "Revising…";
+  try {
+    const r = await API.reviseChapter(Studio.id, num, { instructions });
+    if (meta) meta.word_count = r.word_count;
+    Studio.renderChapters();
+    const ch = await API.chapter(Studio.id, num);
+    Studio.renderProse(ch.text, ch.image_url);
+    Studio.renderHeaderForChapter(num, { act: meta && meta.act, title: ch.title, word_count: ch.word_count });
+    toast("Chapter revised.", { title: "Revised", type: "good" });
+  } catch (err) { toast(err.message || "Revision failed.", { type: "error" }); }
+  finally { btn.disabled = false; btn.textContent = label; }
+};
+
+Studio.addChapters = async function () {
+  const raw = window.prompt("Continue the story — how many new chapters to outline?\n(You'll then press Generate to write them.)", "3");
+  if (raw === null) return;
+  const count = Math.max(1, Math.min(40, parseInt(raw, 10) || 3));
+  const btn = $("#add-chapters-btn"); btn.disabled = true; const label = btn.textContent; btn.textContent = "Adding…";
+  try {
+    const r = await API.appendChapters(Studio.id, { count });
+    Studio.data = await API.book(Studio.id);
+    Studio.renderChapters();
+    const gen = $("#generate-btn"); if (gen) $(".btn-label", gen).textContent = "Resume";
+    toast(`Added ${(r.added || []).length} chapter(s) — press Generate to write them.`, { title: "Outline extended", type: "good" });
+  } catch (err) { toast(err.message || "Couldn't add chapters.", { type: "error" }); }
+  finally { btn.disabled = false; btn.textContent = label; }
 };
 
 /* cost rail */
@@ -2561,6 +2735,7 @@ function boot() {
   document.addEventListener("click", (e) => {
     if (!e.target.closest) return;
     if (e.target.closest('[data-action="open-settings"]')) { e.preventDefault(); SettingsModal.open(); return; }
+    if (e.target.closest('[data-action="import"]')) { e.preventDefault(); ImportModal.open(); return; }
     if (e.target.closest('a[href="#/new"], [data-action="new-book"]')) { e.preventDefault(); CreateModal.open(); }
   });
   Router.start();
