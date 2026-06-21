@@ -9,7 +9,7 @@
 A local‑first book‑generation studio with a sleek, modern UI, an HTTP API, and a Model‑Context‑Protocol server — so a human *or an AI agent* can use it as a tool.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-187%20passing-2ea44f)
+![Tests](https://img.shields.io/badge/tests-191%20passing-2ea44f)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 ![MCP](https://img.shields.io/badge/MCP-24%20tools-7c3aed)
 ![KDP](https://img.shields.io/badge/Amazon%20KDP-fast%20publish-FF9900?logo=amazon&logoColor=white)
@@ -279,7 +279,7 @@ Install with capped, reproducible dependencies; for a locked deploy, layer a `pi
 ## 🧪 Tested & solid
 
 ```bash
-python -m pytest -q                       # 187 tests, runs fully offline (mock model)
+python -m pytest -q                       # 191 tests, runs fully offline (mock model)
 ```
 
 The whole package imports and its test suite runs with **zero third‑party installs** (the LLM client is mockable). Server/MCP tests skip cleanly if those extras aren't installed.
@@ -300,7 +300,7 @@ bookwriter/
   mcp_server.py  MCP stdio server (24 tools)
   web/           the studio UI (index.html, styles.css, app.js, covers.js, palette.js, kdp.js)
 docs/            ARCHITECTURE.md · MCP.md · screenshots/
-tests/           187 offline tests
+tests/           191 offline tests
 ```
 
 ---
