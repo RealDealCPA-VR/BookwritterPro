@@ -1473,8 +1473,11 @@ input:invalid:not(:placeholder-shown) { border-color: var(--bad); box-shadow: 0 
 .toast.is-out { animation: toastOut .3s var(--ease) forwards; }
 .toast.t-good { border-left-color: var(--good); }
 .toast.t-error { border-left-color: var(--bad); }
+.toast.t-warn { border-left-color: var(--warn); }
 .toast-icon { flex: 0 0 auto; margin-top: 1px; }
-.toast.t-good .toast-icon { color: var(--good); } .toast.t-error .toast-icon { color: var(--bad); } .toast.t-info .toast-icon { color: var(--accent); }
+.toast.t-good .toast-icon { color: var(--good); } .toast.t-error .toast-icon { color: var(--bad); } .toast.t-info .toast-icon { color: var(--accent); } .toast.t-warn .toast-icon { color: var(--warn); }
+/* Muted action (e.g. PDF buttons when the optional [pdf] extra isn't installed). */
+.kdp-action.is-muted { opacity: .55; }
 .toast-body { font-size: var(--t-sm); }
 .toast-body strong { display: block; }
 .toast-body span { color: var(--ink-soft); }

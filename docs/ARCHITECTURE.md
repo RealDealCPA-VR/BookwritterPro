@@ -95,7 +95,7 @@ the raw material.
 | `costs.py` | `CostLedger` — per-call token + dollar accounting, cache-savings, `$/1k words`. |
 | `store.py` | `BookStore(project_dir)`: load/save graph & bible, `has_chapter(n)`, `assemble_manuscript`, `chapter_md(n)`, `book_path`. |
 | `pipeline.py` | `BookPipeline` orchestrator — `.plan()`, `.load()`, `.write_all()`, exposes `.graph` and `.ledger`, emits `on_event` dicts. |
-| `cli.py` / `__main__.py` | `bookwriter` CLI (`profiles`, `plan`, `write`, `generate`, `report`, `kdp`, `price`). |
+| `cli.py` / `__main__.py` | `bookwriter` CLI (`profiles`, `plan`, `write`, `generate`, `report`, `import`, `revise`, `continue`, `kdp`, `price`, `cover`, `pdf`). |
 
 ### `BookPipeline` surface
 
@@ -116,7 +116,7 @@ BookPipeline(llm, settings, progress=None, on_event=None, stream_prose=False)
 | `plan_done` | `{title, chapters, characters, bible, cost}` |
 | `chapter_start` | `{number, title, act, word_target}` |
 | `delta` | `{number, text}` — incremental prose (only when `stream_prose=True`) |
-| `chapter_done` | `{number, title, words, text, synopsis, flags, fingerprint, cost}` |
+| `chapter_done` | `{number, title, words, text, synopsis, flags, image, fingerprint, cost}` |
 | `manuscript_done` | `{words, cost}` |
 
 `cost` snapshot shape:

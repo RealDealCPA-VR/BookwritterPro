@@ -141,8 +141,10 @@ def create_app(data_dir: str | None = None) -> FastAPI:
     async def providers() -> Dict[str, Any]:
         from ..provider import provider_catalog
         from ..images import image_status
+        from ..pdf import pdf_available
         cat = provider_catalog()
         cat["image"] = image_status()  # which image backend is active + usable
+        cat["pdf"] = {"available": pdf_available()}  # is the optional [pdf] extra installed?
         return cat
 
     @app.get("/api/settings")

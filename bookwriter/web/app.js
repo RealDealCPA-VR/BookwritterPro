@@ -124,6 +124,7 @@ function toast(message, { title, type = "info", timeout = 4200 } = {}) {
     good: '<path d="M5 13l4 4L19 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>',
     error: '<path d="M12 8v5M12 16.5v.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>',
     info: '<path d="M12 11v5M12 8v.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>',
+    warn: '<path d="M12 3l9 16H3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 16.5v.3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
   };
   el.innerHTML =
     `<span class="toast-icon"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">${icons[type] || icons.info}</svg></span>` +

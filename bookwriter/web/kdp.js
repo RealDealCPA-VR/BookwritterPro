@@ -711,12 +711,46 @@
       }
     });
 
-    // -------------------------------------------------- PDF download links
-    for (const [sel, part] of [["#kdp-pdf-full", "full"], ["#kdp-pdf-interior", "interior"],
-                               ["#kdp-pdf-front", "front-cover"], ["#kdp-pdf-back", "back-cover"]]) {
-      const el = $(sel, view);
-      if (el) el.setAttribute("href", `/api/books/${id}/export/pdf?part=${part}`);
+    // -------------------------------------------------- PDF downloads
+    // Fetch-based so a 501 (reportlab missing) / 404 (no chapters) surfaces as a
+    // toast instead of saving the JSON error body as a "file".
+    const pdfBtns = [["#kdp-pdf-full", "full"], ["#kdp-pdf-interior", "interior"],
+                     ["#kdp-pdf-front", "front-cover"], ["#kdp-pdf-back", "back-cover"]];
+    async function downloadPdf(part, btn) {
+      btn.classList.add("is-busy"); btn.disabled = true;
+      try {
+        const res = await fetch(`/api/books/${id}/export/pdf?part=${part}`);
+        if (!res.ok) {
+          let detail = `PDF export failed (${res.status}).`;
+          try { const j = await res.json(); if (j && j.detail) detail = j.detail; } catch {}
+          toast(detail, { title: "Couldn't export PDF", type: "error" });
+          return;
+        }
+        const blob = await res.blob();
+        const a = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        a.href = url; a.download = `${(meta.title || id)}-${part}.pdf`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+      } catch (err) {
+        toast(err.message || "PDF export failed.", { title: "Couldn't export PDF", type: "error" });
+      } finally { btn.classList.remove("is-busy"); btn.disabled = false; }
     }
+    for (const [sel, part] of pdfBtns) {
+      const el = $(sel, view);
+      if (!el) continue;
+      el.removeAttribute("href"); el.removeAttribute("download");  // it's now a fetch button
+      el.addEventListener("click", (e) => { e.preventDefault(); downloadPdf(part, el); });
+    }
+    // Gate on the optional [pdf] extra: if reportlab isn't installed, disable the
+    // buttons and say so, instead of letting a click 501.
+    API.providers().then((cat) => {
+      if (cat && cat.pdf && cat.pdf.available === false) {
+        for (const [sel] of pdfBtns) { const el = $(sel, view); if (el) el.classList.add("is-muted"); }
+        const note = $("#kdp-pdf-note", view);
+        if (note) note.textContent = 'PDF export needs the optional "pdf" extra — install with: pip install -e ".[pdf]"';
+      }
+    }).catch(() => { /* leave buttons enabled; click will surface any error */ });
 
     // ------------------------------------------------- Download cover (PNG)
     $("#kdp-cover-dl", view).addEventListener("click", () => downloadCoverPng(meta, view));
