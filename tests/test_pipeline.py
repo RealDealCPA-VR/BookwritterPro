@@ -34,6 +34,18 @@ class TestPipeline(unittest.TestCase):
             # rolling synopsis has one line per chapter
             self.assertEqual(len([s for s in pipe.graph.synopsis if s]), 3)
 
+    def test_words_per_chapter_is_authoritative(self):
+        # The Short/Medium/Long picker must control word_target on every chapter,
+        # overriding whatever the planner model proposes.
+        with tempfile.TemporaryDirectory() as tmp:
+            short = BookPipeline(MockLLM(), self._settings(tmp)).plan(
+                premise="x", chapters=3, words_per_chapter=900)
+            self.assertTrue(all(p.word_target == 900 for p in short.outline))
+        with tempfile.TemporaryDirectory() as tmp:
+            long = BookPipeline(MockLLM(), self._settings(tmp)).plan(
+                premise="x", chapters=3, words_per_chapter=3500)
+            self.assertTrue(all(p.word_target == 3500 for p in long.outline))
+
     def test_prompt_cache_engages_after_first_chapter(self):
         with tempfile.TemporaryDirectory() as tmp:
             pipe = BookPipeline(MockLLM(), self._settings(tmp))

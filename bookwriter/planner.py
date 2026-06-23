@@ -87,9 +87,13 @@ def plan_book(
         use_cache=False,
     )
     bible = build_bible(data)
-    # Backfill word targets if the model omitted them.
-    for p in bible.outline:
-        if not p.word_target:
+    # The requested per-chapter length is the user's explicit choice (the
+    # Short/Medium/Long picker), so it is AUTHORITATIVE: force every chapter's
+    # word_target to it rather than letting the planner model pick its own
+    # (which made the length setting appear to do nothing). Callers that want the
+    # model to vary lengths can edit word_target on individual chapters later.
+    if words_per_chapter:
+        for p in bible.outline:
             p.word_target = words_per_chapter
     return bible
 

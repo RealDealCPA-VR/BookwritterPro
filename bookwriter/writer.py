@@ -61,14 +61,23 @@ def write_chapter(
     if is_last:
         parts.append("\nThis is the FINAL chapter: resolve the open threads and deliver a "
                      "satisfying ending. Do not introduce a new cliffhanger.")
-    parts.append(f"\nWrite approximately {plan.word_target} words of prose.")
+    target = plan.word_target or 2000
+    lo, hi = int(target * 0.85), int(target * 1.15)
+    parts.append(
+        f"\nLENGTH (important): write a COMPLETE chapter of about {target} words "
+        f"(aim for the {lo}–{hi} range). Develop the scenes fully to reach this "
+        f"length — do NOT stop early, summarize, or pad with filler."
+    )
 
     text = llm.complete_text(
         stage="write",
         model=settings.profile.write,
         system=WRITER_SYSTEM,
         user="\n".join(parts),
-        max_tokens=settings.max_tokens_write,
+        # Scale the output budget to the requested length so a long chapter isn't
+        # truncated (~1.6 tokens/word + headroom), but never below the configured
+        # floor and capped to a sane ceiling.
+        max_tokens=min(32000, max(settings.max_tokens_write, int(target * 2) + 1000)),
         ledger=ledger,
         cached=cached,
         use_cache=settings.use_cache,
